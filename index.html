@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#10131d">
+  <title>CRYP Mining — перша версія</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="game.js" defer></script>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">MINING SIMULATOR · V0.1</p>
+        <h1>CRYP <span>Mining</span></h1>
+      </div>
+      <div class="player-box">
+        <label for="playerName">Гравець</label>
+        <input id="playerName" maxlength="20" value="Гравець 1" autocomplete="off">
+      </div>
+    </header>
+
+    <section class="stats" aria-label="Статистика">
+      <article class="stat-card"><span>Гроші</span><strong id="cashValue">$1 000</strong><small>на рахунку</small></article>
+      <article class="stat-card"><span>Криптовалюта</span><strong id="crypValue">0.000 CRYP</strong><small>видобуто</small></article>
+      <article class="stat-card"><span>Швидкість майнінгу</span><strong id="rateValue">0.000 CRYP/с</strong><small id="gpuCount">0 відеокарт</small></article>
+      <article class="stat-card"><span>Курс CRYP</span><strong id="priceValue">$10.00</strong><small>за 1 CRYP · змінюється</small></article>
+    </section>
+
+    <section class="panel farm-panel">
+      <div class="section-heading">
+        <div><p class="eyebrow">ТВОЯ ФЕРМА</p><h2>Обладнання</h2></div>
+        <button class="primary-button" id="openShop">＋ Купити відеокарту</button>
+      </div>
+      <p class="hint">Натисни на порожню клітинку, щоб встановити куплену відеокарту.</p>
+      <div class="farm-grid" id="farmGrid" aria-label="Слоти ферми"></div>
+      <div class="farm-footer">
+        <span><i class="dot dot-green"></i> Відеокарта працює, коли гра активна</span>
+        <button class="text-button" id="resetButton">Скинути прогрес</button>
+      </div>
+    </section>
+
+    <section class="lower-grid">
+      <section class="panel">
+        <div class="section-heading"><div><p class="eyebrow">ФІНАНСИ</p><h2>Електроенергія</h2></div><span class="status-pill" id="billStatus">Очікування рахунку</span></div>
+        <p class="hint">Рахунок надходить кожні 30 хвилин. На оплату є 10 хвилин. Прострочений борг зростає на 25% щогодини.</p>
+        <div class="bill-row"><span>До сплати</span><strong id="billAmount">$0.00</strong></div>
+        <div class="bill-row"><span>Час до наступного рахунку</span><strong id="nextBill">30:00</strong></div>
+        <div class="bill-row"><span>Час на оплату</span><strong id="payTimer">—</strong></div>
+        <button class="primary-button wide-button" id="payBill">Сплатити рахунок</button>
+        <p class="small-note" id="billMessage">У цій версії оплата виконується вручну.</p>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading"><div><p class="eyebrow">МАГАЗИН</p><h2>Відеокарти</h2></div></div>
+        <div class="shop-list" id="shopList"></div>
+        <p class="small-note">Ціни та швидкість — початкові ігрові значення, їх можна буде змінити.</p>
+      </section>
+    </section>
+    <footer><span>CRYP Mining · Прототип 0.1</span><span id="saveStatus">Збереження на цьому пристрої</span></footer>
+  </main>
+
+  <dialog id="shopDialog" class="shop-dialog">
+    <div class="dialog-heading"><div><p class="eyebrow">МАГАЗИН</p><h2>Встановити відеокарту</h2></div><button class="icon-button" id="closeShop" aria-label="Закрити">✕</button></div>
+    <p class="hint" id="slotHint">Обери відеокарту для цього слота.</p>
+    <div id="dialogShopList" class="shop-list"></div>
+  </dialog>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
