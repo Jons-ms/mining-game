@@ -14,7 +14,7 @@
 </head>
 <body>
 
-    <section id="authScreen" class="auth-screen" hidden>
+    <section id="authScreen" class="auth-screen">
       <div class="auth-card panel">
         <h1>CRYP Mining</h1>
         <p class="hint">Увійди, щоб зберігати прогрес і грати з різних пристроїв.</p>
@@ -35,7 +35,7 @@
       </div>
     </section>
 
-  <main class="app" id="gameApp">
+  <main class="app" id="gameApp" hidden>
     <header class="topbar"></header>
 
     <section class="stats" aria-label="Статистика">
@@ -95,7 +95,7 @@
 
     <section class="page-section" id="page-info" hidden>
       <section class="panel">
-        <div class="section-heading"><h2>Інформація</h2></div>
+        <div class="section-heading"><h2>Інформація</h2><button class="secondary-button" id="signOutButton" type="button" hidden>Вийти з акаунта</button></div>
         <div class="profile-card">
           <div class="profile-avatar" aria-hidden="true">👾</div>
           <div class="profile-name-editor"><label class="profile-label" for="playerName">Ім’я гравця</label><input id="playerName" maxlength="20" value="Гравець 1" autocomplete="off" aria-label="Ім’я гравця"></div>
