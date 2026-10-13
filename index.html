@@ -24,20 +24,71 @@
       <article class="stat-card"><span>Курс CRYP</span><strong id="priceValue">1,00 ₴</strong><small>за 1 CRYP · змінюється</small></article>
     </section>
 
-    <section class="panel farm-panel">
-      <div class="section-heading">
-        <div><h2>Ферма</h2></div>
-        <button class="primary-button" id="openShop">＋ Купити відеокарту</button>
-      </div>
-      <p class="hint">Натисни «+» на вільній клітинці, щоб відкрити інвентар і встановити відеокарту.</p>
-      <div class="farm-grid" id="farmGrid" aria-label="Слоти ферми"></div>
+    <nav class="page-nav" aria-label="Основна навігація">
+      <button class="nav-button active" type="button" data-page="farm">Ферма</button>
+      <button class="nav-button" type="button" data-page="exchange">Біржа</button>
+      <button class="nav-button" type="button" data-page="shop">Магазин</button>
+      <button class="nav-button" type="button" data-page="info">Інформація</button>
+    </nav>
+
+    <section class="page-section" id="page-farm">
+      <section class="panel farm-panel">
+        <div class="section-heading">
+          <div><h2>Ферма</h2></div>
+          <button class="primary-button" id="openShop">＋ Купити відеокарту</button>
+        </div>
+        <p class="hint">Натисни «+» на вільній клітинці, щоб відкрити інвентар і встановити відеокарту.</p>
+        <div class="farm-grid" id="farmGrid" aria-label="Слоти ферми"></div>
+      </section>
     </section>
 
-    <section class="lower-grid">
+    <section class="page-section" id="page-exchange" hidden>
+      <section class="panel">
+        <div class="section-heading"><h2>Криптовалютна біржа</h2><span class="status-pill">Курс оновлюється</span></div>
+        <p class="hint">Обмінюй видобуту CRYP на гривні за поточним ігровим курсом.</p>
+        <div class="exchange-rate-card">
+          <span>Поточний курс</span>
+          <strong id="exchangePrice">1,00 ₴</strong>
+          <small>за 1 CRYP</small>
+        </div>
+        <div class="exchange-form">
+          <label for="sellAmount">Скільки CRYP продати?</label>
+          <input id="sellAmount" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Наприклад, 10">
+          <div class="exchange-preview">Отримаєш: <strong id="sellPreview">0,00 ₴</strong></div>
+          <div class="exchange-actions">
+            <button class="secondary-button" id="sellAllButton" type="button">Продати все</button>
+            <button class="primary-button" id="sellButton" type="button">Продати CRYP</button>
+          </div>
+          <p class="small-note" id="exchangeBalance">У тебе 0.000 CRYP.</p>
+        </div>
+      </section>
+    </section>
+
+    <section class="page-section" id="page-shop" hidden>
       <section class="panel">
         <div class="section-heading"><h2>Магазин відеокарт</h2></div>
+        <p class="hint">Куплені відеокарти спочатку потрапляють в інвентар. Потім установи їх у вільний слот на сторінці «Ферма».</p>
         <div class="shop-list" id="shopList"></div>
         <p class="small-note">Ціни та швидкість — початкові ігрові значення.</p>
+      </section>
+    </section>
+
+    <section class="page-section" id="page-info" hidden>
+      <section class="panel">
+        <div class="section-heading"><h2>Інформація про гравця</h2></div>
+        <div class="profile-card">
+          <div class="profile-avatar" aria-hidden="true">👤</div>
+          <div><span class="profile-label">Ім’я гравця</span><strong id="infoPlayerName">Гравець 1</strong></div>
+        </div>
+        <div class="profile-grid">
+          <article class="profile-stat"><span>Баланс</span><strong id="infoCash">300 ₴</strong></article>
+          <article class="profile-stat"><span>Криптовалюта</span><strong id="infoCryp">0.000 CRYP</strong></article>
+          <article class="profile-stat"><span>Швидкість майнінгу</span><strong id="infoRate">0.000 CRYP/с</strong></article>
+          <article class="profile-stat"><span>Встановлено відеокарт</span><strong id="infoInstalled">0 / 16</strong></article>
+          <article class="profile-stat"><span>Відеокарт в інвентарі</span><strong id="infoInventory">0</strong></article>
+          <article class="profile-stat"><span>Поточний курс CRYP</span><strong id="infoPrice">1,00 ₴</strong></article>
+        </div>
+        <p class="small-note">Прогрес зберігається локально в браузері на цьому пристрої. Синхронізація між пристроями та спільний онлайн-профіль поки не підключені.</p>
       </section>
     </section>
     <footer><span id="saveStatus">Збереження на цьому пристрої</span></footer>
