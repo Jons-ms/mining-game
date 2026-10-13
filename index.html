@@ -6,6 +6,18 @@
   <meta name="theme-color" content="#10131d">
   <title>Майнінг-гра</title>
   <link rel="stylesheet" href="style.css?v=20261013-2">
+  <script>
+    // Show early JavaScript failures on the login screen so they are diagnosable without DevTools.
+    window.addEventListener("error", function (event) {
+      const box = document.getElementById("authMessage");
+      if (box && event.message) box.textContent = "Помилка JavaScript: " + event.message + (event.lineno ? " (рядок " + event.lineno + ")" : "");
+    });
+    window.addEventListener("unhandledrejection", function (event) {
+      const box = document.getElementById("authMessage");
+      const reason = event.reason;
+      if (box) box.textContent = "Помилка запуску: " + (reason && reason.message ? reason.message : String(reason || "невідома помилка"));
+    });
+  </script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
