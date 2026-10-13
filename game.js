@@ -2,6 +2,10 @@
   "use strict";
 
   let SAVE_KEY = null;
+  let currentUserUID = null;
+  let cloudSaveReady = false;
+  let cloudSaveTimer = null;
+  let cloudSaveInProgress = Promise.resolve();
   const SLOT_COUNT = 16;
   const MIN_PRICE = 0.25;
   const MAX_PRICE = 7;
@@ -83,11 +87,37 @@
   }
 
   function save() {
+    if (!SAVE_KEY) return;
+
     try {
-      if (!SAVE_KEY) return;
       localStorage.setItem(SAVE_KEY, JSON.stringify(state));
-      els.saveStatus.textContent = "Збережено локально для цього акаунта";
+      if (!cloudSaveReady || !currentUserUID || !window.crypFirebase?.db) {
+        els.saveStatus.textContent = "Збережено на цьому пристрої";
+        return;
+      }
+
+      clearTimeout(cloudSaveTimer);
+      cloudSaveTimer = setTimeout(() => {
+        const uid = currentUserUID;
+        const stateToSave = JSON.parse(JSON.stringify(state));
+        cloudSaveInProgress = cloudSaveInProgress
+          .catch(() => {})
+          .then(() => {
+            if (uid !== currentUserUID || !cloudSaveReady) return;
+            return window.crypFirebase.db.collection("players").doc(uid).set({
+              ...stateToSave,
+              updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+            }).then(() => {
+              if (uid === currentUserUID) els.saveStatus.textContent = "Збережено в хмарі";
+            });
+          })
+          .catch((error) => {
+            console.error("Помилка хмарного збереження:", error);
+            if (uid === currentUserUID) els.saveStatus.textContent = "Хмарне збереження не працює — перевір правила Firestore";
+          });
+      }, 500);
     } catch (error) {
+      console.error("Не вдалося зберегти:", error);
       els.saveStatus.textContent = "Не вдалося зберегти";
     }
   }
@@ -570,10 +600,14 @@
       });
     }
 
-    auth.onAuthStateChanged((user) => {
+    auth.onAuthStateChanged(async (user) => {
       authListenerStarted = true;
+      cloudSaveReady = false;
+      clearTimeout(cloudSaveTimer);
+
       if (!user) {
         SAVE_KEY = null;
+        currentUserUID = null;
         authScreen.hidden = false;
         gameApp.hidden = true;
         if (signOutButton) signOutButton.hidden = true;
@@ -581,8 +615,40 @@
       }
 
       try {
+        currentUserUID = user.uid;
         SAVE_KEY = "cryp-mining-v01-" + user.uid;
         state = loadState();
+
+        const db = firebase.db;
+        if (db) {
+          const playerRef = db.collection("players").doc(user.uid);
+          try {
+            const snapshot = await playerRef.get();
+            if (snapshot.exists) {
+              const remote = snapshot.data();
+              if (remote && Array.isArray(remote.slots)) {
+                const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
+                state = { ...newState(), ...remote };
+                state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null)
+                  .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
+                state.inventory = Array.isArray(remote.inventory) ? remote.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
+                state.price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(state.price) || 1));
+                localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+              }
+            } else {
+              // First login on a device uploads its existing local save instead of discarding it.
+              await playerRef.set({
+                ...state,
+                updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+              });
+            }
+            cloudSaveReady = true;
+          } catch (cloudError) {
+            console.error("Не вдалося завантажити/створити хмарне збереження:", cloudError);
+            els.saveStatus.textContent = "Не вдалося підключити хмарне збереження — перевір правила Firestore";
+          }
+        }
+
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
           state.playerName = user.displayName.slice(0, 20);
         }
@@ -591,8 +657,13 @@
         authScreen.hidden = true;
         gameApp.hidden = false;
         if (signOutButton) signOutButton.hidden = false;
-        els.saveStatus.textContent = "Збереження лише на цьому пристрої; хмарна синхронізація ще не підключена";
-        save();
+        if (cloudSaveReady) {
+          els.saveStatus.textContent = "Хмарне збереження підключено";
+          save();
+        } else {
+          els.saveStatus.textContent = "Локальне збереження; хмара не підключена";
+          save();
+        }
       } catch (error) {
         console.error("Не вдалося відкрити гру після входу:", error);
         authScreen.hidden = false;
@@ -604,5 +675,7 @@
 
   window.__crypAuthHandlersReady = Boolean(firebase && firebase.ready && firebase.auth);
   setAuthMode("login");
+  // Run mining, price updates, and periodic saves once per second.
+  window.setInterval(tick, 1000);
   window.addEventListener("beforeunload", save);
 })();
