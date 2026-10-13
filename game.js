@@ -17,7 +17,7 @@
     cash: $("cashValue"), cryp: $("crypValue"), rate: $("rateValue"),
     gpuCount: $("gpuCount"), price: $("priceValue"), grid: $("farmGrid"),
     shop: $("shopList"), inventory: $("inventoryList"),
-    inventoryCount: $("inventoryCount"), inventoryHint: $("inventoryHint"),
+    inventoryHint: $("inventoryHint"), inventoryModal: $("inventoryModal"),
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus")
   };
 
@@ -53,7 +53,7 @@
   }
 
   let state = loadState();
-  let selectedInventoryId = null;
+  let targetSlotIndex = null;
   let lastVisibleTick = document.hidden ? null : Date.now();
   let hiddenAt = null;
   let toastTimeout = null;
@@ -120,8 +120,7 @@
     state.slots.forEach((gpu, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "slot" + (gpu ? " occupied" : "") +
-        (selectedInventoryId && !gpu ? " farm-slot-selected" : "");
+      button.className = "slot" + (gpu ? " occupied" : "");
       button.setAttribute("aria-label", gpu ? gpu.name + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
       if (gpu) {
         const icon = document.createElement("span");
@@ -135,7 +134,7 @@
         plus.className = "plus";
         plus.textContent = "+";
         button.appendChild(plus);
-        button.addEventListener("click", () => installSelectedGPU(index));
+        button.addEventListener("click", () => openInventory(index));
       }
       els.grid.appendChild(button);
     });
@@ -171,21 +170,18 @@
 
   function renderInventory() {
     els.inventory.replaceChildren();
-    els.inventoryCount.textContent = state.inventory.length + " відеокарт";
     if (!state.inventory.length) {
       const empty = document.createElement("div");
       empty.className = "empty-inventory";
       empty.textContent = "Інвентар порожній. Купи відеокарту в магазині.";
       els.inventory.appendChild(empty);
-      els.inventoryHint.textContent = "Куплені відеокарти зберігатимуться тут, доки ти не встановиш їх на ферму.";
+      els.inventoryHint.textContent = "Інвентар порожній. Закрий це вікно та купи відеокарту в магазині.";
       return;
     }
-    els.inventoryHint.textContent = selectedInventoryId
-      ? "Тепер натисни «+» у вільній клітинці ферми, щоб установити вибрану карту."
-      : "Натисни «Обрати», а потім «+» у вільній клітинці ферми.";
+    els.inventoryHint.textContent = "Вибери відеокарту, щоб установити її у вибрану клітинку ферми.";
     state.inventory.forEach((gpu) => {
       const item = document.createElement("div");
-      item.className = "shop-item inventory-item" + (selectedInventoryId === gpu.inventoryId ? " selected" : "");
+      item.className = "shop-item inventory-item";
       const icon = document.createElement("div");
       icon.className = "gpu-icon";
       icon.textContent = gpu.icon || "▰";
@@ -199,12 +195,8 @@
       const choose = document.createElement("button");
       choose.type = "button";
       choose.className = "shop-buy";
-      choose.textContent = selectedInventoryId === gpu.inventoryId ? "Обрано" : "Обрати";
-      choose.addEventListener("click", () => {
-        selectedInventoryId = selectedInventoryId === gpu.inventoryId ? null : gpu.inventoryId;
-        renderInventory();
-        renderFarm();
-      });
+      choose.textContent = "Установити";
+      choose.addEventListener("click", () => installInventoryGPU(gpu.inventoryId));
       item.append(icon, info, choose);
       els.inventory.appendChild(item);
     });
@@ -228,27 +220,32 @@
     showToast(gpuType.name + " додано в інвентар.");
   }
 
-  function installSelectedGPU(slotIndex) {
-    if (!selectedInventoryId) {
-      showToast("Спочатку обери відеокарту в інвентарі.");
+  function openInventory(slotIndex) {
+    targetSlotIndex = slotIndex;
+    renderInventory();
+    els.inventoryModal.hidden = false;
+    $("closeInventory").focus();
+  }
+
+  function closeInventory() {
+    els.inventoryModal.hidden = true;
+    targetSlotIndex = null;
+  }
+
+  function installInventoryGPU(inventoryId) {
+    if (targetSlotIndex === null || state.slots[targetSlotIndex]) {
+      closeInventory();
       return;
     }
-    if (state.slots[slotIndex]) {
-      showToast("Ця клітинка вже зайнята.");
-      return;
-    }
-    const inventoryIndex = state.inventory.findIndex((gpu) => gpu.inventoryId === selectedInventoryId);
-    if (inventoryIndex < 0) {
-      selectedInventoryId = null;
-      renderInventory();
-      return;
-    }
+    const inventoryIndex = state.inventory.findIndex((gpu) => gpu.inventoryId === inventoryId);
+    if (inventoryIndex < 0) return;
     const gpu = state.inventory.splice(inventoryIndex, 1)[0];
-    state.slots[slotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate };
-    selectedInventoryId = null;
+    state.slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate };
+    const installedName = gpu.name;
+    closeInventory();
     render();
     save();
-    showToast(gpu.name + " встановлено на ферму.");
+    showToast(installedName + " встановлено на ферму.");
   }
 
   function render() {
@@ -287,6 +284,14 @@
       render();
       save();
     }
+  });
+
+  $("closeInventory").addEventListener("click", closeInventory);
+  els.inventoryModal.addEventListener("click", (event) => {
+    if (event.target === els.inventoryModal) closeInventory();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !els.inventoryModal.hidden) closeInventory();
   });
 
   $("openShop").addEventListener("click", () => {
