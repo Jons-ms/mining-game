@@ -10,12 +10,7 @@
 </head>
 <body>
   <main class="app">
-    <header class="topbar">
-      <div class="player-box">
-        <label for="playerName">Гравець</label>
-        <input id="playerName" maxlength="20" value="Гравець 1" autocomplete="off">
-      </div>
-    </header>
+    <header class="topbar"></header>
 
     <section class="stats" aria-label="Статистика">
       <article class="stat-card"><span>Гроші</span><strong id="cashValue">300 ₴</strong><small>на рахунку</small></article>
@@ -37,7 +32,6 @@
           <div><h2>Ферма</h2></div>
           <button class="primary-button" id="openShop">＋ Купити відеокарту</button>
         </div>
-        <p class="hint">Натисни «+» на вільній клітинці, щоб відкрити інвентар і встановити відеокарту.</p>
         <div class="farm-grid" id="farmGrid" aria-label="Слоти ферми"></div>
       </section>
     </section>
@@ -78,7 +72,7 @@
         <div class="section-heading"><h2>Інформація про гравця</h2></div>
         <div class="profile-card">
           <div class="profile-avatar" aria-hidden="true">👤</div>
-          <div><span class="profile-label">Ім’я гравця</span><strong id="infoPlayerName">Гравець 1</strong></div>
+          <div class="profile-name-editor"><label class="profile-label" for="playerName">Ім’я гравця</label><input id="playerName" maxlength="20" value="Гравець 1" autocomplete="off" aria-label="Ім’я гравця"></div>
         </div>
         <div class="profile-grid">
           <article class="profile-stat"><span>Баланс</span><strong id="infoCash">300 ₴</strong></article>
