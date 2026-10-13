@@ -222,3 +222,19 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .exchange-balance-card { display:grid; gap:8px; padding:18px 20px; margin:18px 0 12px; border:1px solid var(--border); border-radius:14px; background:linear-gradient(135deg,rgba(35,43,65,.9),rgba(15,22,32,.8)); }
 .exchange-balance-card span { color:var(--muted); font-size:13px; }
 .exchange-balance-card strong { color:var(--accent); font-size:clamp(25px,4.5vw,34px); letter-spacing:-.03em; overflow-wrap:anywhere; }
+
+
+/* Екран авторизації */
+.auth-screen { position:fixed; inset:0; z-index:100; display:grid; place-items:center; overflow:auto; padding:20px; background:radial-gradient(ellipse at 20% 0%, #1b2740 0, transparent 42%), var(--bg); }
+.auth-screen[hidden] { display:none; }
+.auth-card { width:min(440px,100%); padding:24px; }
+.auth-card h1 { margin:0; text-align:center; font-size:30px; }
+.auth-card > .hint { text-align:center; }
+.auth-tabs { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:18px 0; }
+.auth-form { display:grid; gap:9px; }
+.auth-form label { margin-top:6px; color:var(--muted); font-size:13px; }
+.auth-divider { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:12px; margin:16px 0; }
+.auth-divider::before,.auth-divider::after { content:""; height:1px; flex:1; background:var(--border); }
+#authMessage { overflow-wrap:anywhere; }
+.auth-account-bar { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+.auth-account-bar button { padding:7px 10px; }
