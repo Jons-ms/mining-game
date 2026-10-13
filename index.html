@@ -29,17 +29,11 @@
         <div><h2>Ферма</h2></div>
         <button class="primary-button" id="openShop">＋ Купити відеокарту</button>
       </div>
-      <p class="hint">Куплені відеокарти потрапляють в інвентар. Обери карту в інвентарі, а потім натисни «+» на фермі, щоб установити її.</p>
+      <p class="hint">Натисни «+» на вільній клітинці, щоб відкрити інвентар і встановити відеокарту.</p>
       <div class="farm-grid" id="farmGrid" aria-label="Слоти ферми"></div>
     </section>
 
     <section class="lower-grid">
-      <section class="panel">
-        <div class="section-heading"><h2>Інвентар</h2><span class="status-pill" id="inventoryCount">0 відеокарт</span></div>
-        <p class="hint" id="inventoryHint">Тут з’являтимуться куплені відеокарти.</p>
-        <div class="inventory-list" id="inventoryList"></div>
-      </section>
-
       <section class="panel">
         <div class="section-heading"><h2>Магазин відеокарт</h2></div>
         <div class="shop-list" id="shopList"></div>
@@ -49,6 +43,16 @@
     <footer><span id="saveStatus">Збереження на цьому пристрої</span></footer>
   </main>
 
+  <div class="inventory-modal" id="inventoryModal" hidden>
+    <div class="inventory-dialog panel" role="dialog" aria-modal="true" aria-labelledby="inventoryTitle">
+      <div class="section-heading">
+        <h2 id="inventoryTitle">Обери відеокарту</h2>
+        <button class="modal-close" id="closeInventory" type="button" aria-label="Закрити">×</button>
+      </div>
+      <p class="hint" id="inventoryHint">Вибери відеокарту, щоб установити її у вибрану клітинку.</p>
+      <div class="inventory-list" id="inventoryList"></div>
+    </div>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
