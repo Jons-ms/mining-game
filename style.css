@@ -216,3 +216,9 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 
 .profile-name-editor { display:grid; gap:7px; min-width:0; width:min(320px, 100%); }
 .profile-name-editor input { min-width:0; }
+
+
+/* Баланс криптовалюти на біржі показується зверху великим шрифтом. */
+.exchange-balance-card { display:grid; gap:8px; padding:18px 20px; margin:18px 0 12px; border:1px solid var(--border); border-radius:14px; background:linear-gradient(135deg,rgba(35,43,65,.9),rgba(15,22,32,.8)); }
+.exchange-balance-card span { color:var(--muted); font-size:13px; }
+.exchange-balance-card strong { color:var(--accent); font-size:clamp(25px,4.5vw,34px); letter-spacing:-.03em; overflow-wrap:anywhere; }
