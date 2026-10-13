@@ -18,6 +18,7 @@
     gpuCount: $("gpuCount"), price: $("priceValue"), grid: $("farmGrid"),
     shop: $("shopList"), inventory: $("inventoryList"),
     inventoryHint: $("inventoryHint"), inventoryModal: $("inventoryModal"),
+    gpuActionModal: $("gpuActionModal"), gpuActionDetails: $("gpuActionDetails"),
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus")
   };
 
@@ -54,6 +55,7 @@
 
   let state = loadState();
   let targetSlotIndex = null;
+  let actionSlotIndex = null;
   let lastVisibleTick = document.hidden ? null : Date.now();
   let hiddenAt = null;
   let toastTimeout = null;
@@ -127,9 +129,8 @@
         icon.className = "farm-gpu-icon";
         icon.textContent = gpu.icon || "▰";
         button.appendChild(icon);
-        button.title = gpu.name;
-        button.title = gpu.name + " — натисни, щоб зняти карту";
-        button.addEventListener("click", () => removeGPUFromFarm(index));
+        button.title = gpu.name + " — натисни для дій";
+        button.addEventListener("click", () => openGPUActions(index));
       } else {
         const plus = document.createElement("span");
         plus.className = "plus";
@@ -221,9 +222,28 @@
     showToast(gpuType.name + " додано в інвентар.");
   }
 
-  function removeGPUFromFarm(slotIndex) {
+  function openGPUActions(slotIndex) {
     const gpu = state.slots[slotIndex];
     if (!gpu) return;
+    actionSlotIndex = slotIndex;
+    els.gpuActionDetails.textContent = gpu.name + " · " + number(gpu.rate) + " CRYP/с";
+    els.gpuActionModal.hidden = false;
+    $("removeGpuButton").focus();
+  }
+
+  function closeGPUActions() {
+    els.gpuActionModal.hidden = true;
+    actionSlotIndex = null;
+  }
+
+  function removeGPUFromFarm() {
+    if (actionSlotIndex === null) return;
+    const slotIndex = actionSlotIndex;
+    const gpu = state.slots[slotIndex];
+    if (!gpu) {
+      closeGPUActions();
+      return;
+    }
 
     state.inventory.push({
       inventoryId: String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8),
@@ -233,6 +253,7 @@
       rate: gpu.rate || 0
     });
     state.slots[slotIndex] = null;
+    closeGPUActions();
     render();
     save();
     showToast(gpu.name + " знято з ферми та повернуто в інвентар.");
@@ -304,12 +325,20 @@
     }
   });
 
+  $("closeGpuAction").addEventListener("click", closeGPUActions);
+  $("cancelGpuAction").addEventListener("click", closeGPUActions);
+  $("removeGpuButton").addEventListener("click", removeGPUFromFarm);
+  els.gpuActionModal.addEventListener("click", (event) => {
+    if (event.target === els.gpuActionModal) closeGPUActions();
+  });
+
   $("closeInventory").addEventListener("click", closeInventory);
   els.inventoryModal.addEventListener("click", (event) => {
     if (event.target === els.inventoryModal) closeInventory();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !els.inventoryModal.hidden) closeInventory();
+    if (event.key === "Escape" && !els.gpuActionModal.hidden) closeGPUActions();
   });
 
   $("openShop").addEventListener("click", () => {
