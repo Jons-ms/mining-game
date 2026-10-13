@@ -498,7 +498,7 @@
     authSubmit.disabled = true;
     googleSignIn.disabled = true;
   } else {
-    const auth = firebase.auth();
+    const auth = firebase.auth;
 
     showLogin.addEventListener("click", () => setAuthMode("login"));
     showRegister.addEventListener("click", () => setAuthMode("register"));
