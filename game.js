@@ -416,7 +416,7 @@
     if (event.key === "Escape" && !els.gpuActionModal.hidden) closeGPUActions();
   });
 
-  document.querySelectorAll(".nav-button").forEach((button) => {
+  document.querySelectorAll(".nav-button[data-page]").forEach((button) => {
     button.addEventListener("click", () => showPage(button.dataset.page));
   });
 
@@ -478,7 +478,10 @@
       "auth/popup-closed-by-user": "Вікно Google було закрито до завершення входу.",
       "auth/popup-blocked": "Браузер заблокував вікно входу. Дозволь спливаючі вікна й повтори.",
       "auth/network-request-failed": "Немає з'єднання. Перевір інтернет і спробуй ще раз.",
-      "auth/operation-not-allowed": "Цей спосіб входу не ввімкнено у Firebase Console."
+      "auth/operation-not-allowed": "Цей спосіб входу не ввімкнено у Firebase Console.",
+      "auth/unauthorized-domain": "Домен сайту не дозволений у Firebase. Додай jons-ms.github.io в Authentication → Settings → Authorized domains.",
+      "auth/too-many-requests": "Забагато спроб. Зачекай трохи й повтори.",
+      "auth/internal-error": "Внутрішня помилка Firebase. Перевір налаштування та спробуй ще раз."
     };
     return messages[code] || "Не вдалося увійти. Перевір налаштування Firebase та спробуй ще раз.";
   }
@@ -516,11 +519,17 @@
       showLogin.disabled = true;
       showRegister.disabled = true;
       googleSignIn.disabled = true;
+      authMessage.textContent = authMode === "register" ? "Створюємо акаунт…" : "Входимо в акаунт…";
 
       try {
         if (authMode === "register") {
           const credential = await auth.createUserWithEmailAndPassword(syntheticEmail, password);
-          await credential.user.updateProfile({ displayName: username });
+          authMessage.textContent = "Акаунт створено. Відкриваємо гру…";
+          try {
+            await credential.user.updateProfile({ displayName: username });
+          } catch (profileError) {
+            console.warn("Не вдалося зберегти нікнейм у профілі Firebase:", profileError);
+          }
         } else {
           await auth.signInWithEmailAndPassword(syntheticEmail, password);
         }
@@ -571,18 +580,25 @@
         return;
       }
 
-      SAVE_KEY = "cryp-mining-v01-" + user.uid;
-      state = loadState();
-      if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
-        state.playerName = user.displayName.slice(0, 20);
+      try {
+        SAVE_KEY = "cryp-mining-v01-" + user.uid;
+        state = loadState();
+        if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
+          state.playerName = user.displayName.slice(0, 20);
+        }
+        els.playerName.value = state.playerName;
+        render();
+        authScreen.hidden = true;
+        gameApp.hidden = false;
+        if (signOutButton) signOutButton.hidden = false;
+        els.saveStatus.textContent = "Збереження лише на цьому пристрої; хмарна синхронізація ще не підключена";
+        save();
+      } catch (error) {
+        console.error("Не вдалося відкрити гру після входу:", error);
+        authScreen.hidden = false;
+        gameApp.hidden = true;
+        authMessage.textContent = "Вхід виконано, але гра не змогла завантажитися. Перезавантаж сторінку; якщо проблема повториться, надішли скриншот.";
       }
-      authScreen.hidden = true;
-      gameApp.hidden = false;
-      if (signOutButton) signOutButton.hidden = false;
-      els.playerName.value = state.playerName;
-      els.saveStatus.textContent = "Збереження лише на цьому пристрої; хмарна синхронізація ще не підключена";
-      render();
-      save();
     });
   }
 
