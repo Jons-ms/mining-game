@@ -602,6 +602,7 @@
     });
   }
 
+  window.__crypAuthHandlersReady = Boolean(firebase && firebase.ready && firebase.auth);
   setAuthMode("login");
   window.addEventListener("beforeunload", save);
 })();
