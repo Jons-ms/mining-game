@@ -13,7 +13,28 @@
   <script src="game.js?v=20261013-3" defer></script>
 </head>
 <body>
-  <main class="app">
+
+    <section id="authScreen" class="auth-screen" hidden>
+      <div class="auth-card panel">
+        <h1>CRYP Mining</h1>
+        <p class="hint">Увійди, щоб зберігати прогрес і грати з різних пристроїв.</p>
+        <div class="auth-tabs">
+          <button type="button" class="nav-button active" id="showLogin">Увійти</button>
+          <button type="button" class="nav-button" id="showRegister">Створити акаунт</button>
+        </div>
+        <form id="authForm" class="auth-form">
+          <label for="authUsername">Нікнейм</label>
+          <input id="authUsername" required minlength="3" maxlength="20" autocomplete="username" pattern="[A-Za-z0-9_-]+" placeholder="3–20 символів: a-z, 0-9, _ або -">
+          <label for="authPassword">Пароль</label>
+          <input id="authPassword" type="password" required minlength="6" autocomplete="current-password" placeholder="Щонайменше 6 символів">
+          <button class="primary-button full-width" id="authSubmit" type="submit">Увійти</button>
+        </form>
+        <div class="auth-divider">або</div>
+        <button type="button" class="secondary-button full-width" id="googleSignIn">Продовжити з Google</button>
+        <p class="small-note" id="authMessage" role="status" aria-live="polite"></p>
+      </div>
+    </section>
+\n  <main class="app" id="gameApp">
     <header class="topbar"></header>
 
     <section class="stats" aria-label="Статистика">
