@@ -43,6 +43,18 @@
     <footer><span id="saveStatus">Збереження на цьому пристрої</span></footer>
   </main>
 
+  <div class="gpu-action-modal" id="gpuActionModal" hidden>
+    <div class="gpu-action-dialog panel" role="dialog" aria-modal="true" aria-labelledby="gpuActionTitle">
+      <div class="section-heading">
+        <h2 id="gpuActionTitle">Відеокарта</h2>
+        <button class="modal-close" id="closeGpuAction" type="button" aria-label="Закрити">×</button>
+      </div>
+      <p class="hint" id="gpuActionDetails"></p>
+      <button class="primary-button full-width" id="removeGpuButton" type="button">Зняти карту в інвентар</button>
+      <button class="secondary-button full-width" id="cancelGpuAction" type="button">Скасувати</button>
+    </div>
+  </div>
+
   <div class="inventory-modal" id="inventoryModal" hidden>
     <div class="inventory-dialog panel" role="dialog" aria-modal="true" aria-labelledby="inventoryTitle">
       <div class="section-heading">
