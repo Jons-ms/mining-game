@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const SAVE_KEY = "cryp-mining-v01";
+  let SAVE_KEY = null;
   const SLOT_COUNT = 16;
   const MIN_PRICE = 0.25;
   const MAX_PRICE = 7;
@@ -39,7 +39,7 @@
 
   function loadState() {
     try {
-      const saved = JSON.parse(localStorage.getItem(SAVE_KEY));
+      const saved = SAVE_KEY ? JSON.parse(localStorage.getItem(SAVE_KEY)) : null;
       if (saved && Array.isArray(saved.slots)) {
         const state = { ...newState(), ...saved };
         state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null);
@@ -84,8 +84,9 @@
 
   function save() {
     try {
+      if (!SAVE_KEY) return;
       localStorage.setItem(SAVE_KEY, JSON.stringify(state));
-      els.saveStatus.textContent = "Збережено на цьому пристрої";
+      els.saveStatus.textContent = "Збережено локально для цього акаунта";
     } catch (error) {
       els.saveStatus.textContent = "Не вдалося зберегти";
     }
@@ -440,8 +441,151 @@
     save();
   });
 
-  render();
-  save();
-  setInterval(tick, 1000);
+  // Firebase Authentication: local saves are separated by Firebase UID.
+  const firebase = window.crypFirebase;
+  const authScreen = $("authScreen");
+  const gameApp = $("gameApp");
+  const authForm = $("authForm");
+  const authUsername = $("authUsername");
+  const authPassword = $("authPassword");
+  const authSubmit = $("authSubmit");
+  const authMessage = $("authMessage");
+  const showLogin = $("showLogin");
+  const showRegister = $("showRegister");
+  const googleSignIn = $("googleSignIn");
+  const signOutButton = $("signOutButton");
+  let authMode = "login";
+  let authListenerStarted = false;
+
+  function setAuthMode(mode) {
+    authMode = mode;
+    showLogin.classList.toggle("active", mode === "login");
+    showRegister.classList.toggle("active", mode === "register");
+    authSubmit.textContent = mode === "login" ? "Увійти" : "Створити акаунт";
+    authPassword.autocomplete = mode === "login" ? "current-password" : "new-password";
+    authMessage.textContent = "";
+  }
+
+  function authErrorMessage(error) {
+    const code = error && error.code;
+    const messages = {
+      "auth/invalid-credential": "Неправильний нікнейм або пароль.",
+      "auth/user-not-found": "Акаунт не знайдено. Перевір нікнейм або створи акаунт.",
+      "auth/wrong-password": "Неправильний нікнейм або пароль.",
+      "auth/email-already-in-use": "Цей нікнейм уже зайнятий.",
+      "auth/weak-password": "Пароль має містити щонайменше 6 символів.",
+      "auth/invalid-email": "Нікнейм має неправильний формат.",
+      "auth/popup-closed-by-user": "Вікно Google було закрито до завершення входу.",
+      "auth/popup-blocked": "Браузер заблокував вікно входу. Дозволь спливаючі вікна й повтори.",
+      "auth/network-request-failed": "Немає з'єднання. Перевір інтернет і спробуй ще раз.",
+      "auth/operation-not-allowed": "Цей спосіб входу не ввімкнено у Firebase Console."
+    };
+    return messages[code] || "Не вдалося увійти. Перевір налаштування Firebase та спробуй ще раз.";
+  }
+
+  function showAuthError(error) {
+    console.error("Firebase Auth:", error);
+    authMessage.textContent = authErrorMessage(error);
+  }
+
+  if (!firebase || !firebase.ready || !firebase.auth) {
+    authScreen.hidden = false;
+    gameApp.hidden = true;
+    authMessage.textContent = "Firebase не завантажився. Перевір інтернет і конфігурацію Firebase.";
+    authSubmit.disabled = true;
+    googleSignIn.disabled = true;
+  } else {
+    const auth = firebase.auth();
+
+    showLogin.addEventListener("click", () => setAuthMode("login"));
+    showRegister.addEventListener("click", () => setAuthMode("register"));
+
+    authForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      authMessage.textContent = "";
+      const username = authUsername.value.trim();
+      const normalized = username.toLowerCase();
+      const password = authPassword.value;
+
+      if (!/^[A-Za-z0-9_-]{3,20}$/.test(username)) {
+        authMessage.textContent = "Нікнейм: 3–20 символів, лише латинські літери, цифри, _ або -.";
+        return;
+      }
+      const syntheticEmail = normalized + "@players.cryp-togame.firebaseapp.com";
+      authSubmit.disabled = true;
+      showLogin.disabled = true;
+      showRegister.disabled = true;
+      googleSignIn.disabled = true;
+
+      try {
+        if (authMode === "register") {
+          const credential = await auth.createUserWithEmailAndPassword(syntheticEmail, password);
+          await credential.user.updateProfile({ displayName: username });
+        } else {
+          await auth.signInWithEmailAndPassword(syntheticEmail, password);
+        }
+      } catch (error) {
+        showAuthError(error);
+      } finally {
+        authSubmit.disabled = false;
+        showLogin.disabled = false;
+        showRegister.disabled = false;
+        googleSignIn.disabled = false;
+      }
+    });
+
+    googleSignIn.addEventListener("click", async () => {
+      authMessage.textContent = "";
+      googleSignIn.disabled = true;
+      try {
+        const provider = new firebase.app.auth.GoogleAuthProvider();
+        await auth.signInWithPopup(provider);
+      } catch (error) {
+        showAuthError(error);
+      } finally {
+        googleSignIn.disabled = false;
+      }
+    });
+
+    if (signOutButton) {
+      signOutButton.addEventListener("click", async () => {
+        signOutButton.disabled = true;
+        try {
+          await auth.signOut();
+        } catch (error) {
+          showToast("Не вдалося вийти з акаунта.");
+          console.error(error);
+        } finally {
+          signOutButton.disabled = false;
+        }
+      });
+    }
+
+    auth.onAuthStateChanged((user) => {
+      authListenerStarted = true;
+      if (!user) {
+        SAVE_KEY = null;
+        authScreen.hidden = false;
+        gameApp.hidden = true;
+        if (signOutButton) signOutButton.hidden = true;
+        return;
+      }
+
+      SAVE_KEY = "cryp-mining-v01-" + user.uid;
+      state = loadState();
+      if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
+        state.playerName = user.displayName.slice(0, 20);
+      }
+      authScreen.hidden = true;
+      gameApp.hidden = false;
+      if (signOutButton) signOutButton.hidden = false;
+      els.playerName.value = state.playerName;
+      els.saveStatus.textContent = "Збереження лише на цьому пристрої; хмарна синхронізація ще не підключена";
+      render();
+      save();
+    });
+  }
+
+  setAuthMode("login");
   window.addEventListener("beforeunload", save);
 })();
