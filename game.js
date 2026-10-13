@@ -63,8 +63,7 @@
   let toastTimeout = null;
 
   function money(value) {
-    return Number(value || 0).toLocaleString("uk-UA", { style: "currency", currency: "EUR" })
-      .replace("€", "₴").replace(/\u00a0/g, " ");
+    return Number(value || 0).toLocaleString("uk-UA", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₴";
   }
 
   function number(value, digits = 3) {
@@ -117,7 +116,6 @@
     els.rate.textContent = number(totalRate()) + " CRYP/с";
     els.gpuCount.textContent = allGPUs().length + " / " + SLOT_COUNT + " встановлено";
     els.price.textContent = money(state.price);
-    $("infoPlayerName").textContent = state.playerName;
     $("infoCash").textContent = money(state.cash);
     $("infoCryp").textContent = number(state.cryp) + " CRYP";
     $("infoRate").textContent = number(totalRate()) + " CRYP/с";
