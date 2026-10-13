@@ -119,11 +119,10 @@
     $("infoCash").textContent = money(state.cash);
     $("infoCryp").textContent = number(state.cryp) + " CRYP";
     $("infoRate").textContent = number(totalRate()) + " CRYP/с";
-    $("infoInstalled").textContent = allGPUs().length + " / " + SLOT_COUNT;
     $("infoInventory").textContent = String(state.inventory.length);
     $("infoPrice").textContent = money(state.price);
     if (els.exchangePrice) els.exchangePrice.textContent = money(state.price);
-    if (els.exchangeBalance) els.exchangeBalance.textContent = "У тебе " + number(state.cryp) + " CRYP.";
+    if (els.exchangeBalance) els.exchangeBalance.textContent = number(state.cryp) + " CRYP";
     updateSellPreview();
   }
 
