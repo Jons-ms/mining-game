@@ -19,7 +19,9 @@
     shop: $("shopList"), inventory: $("inventoryList"),
     inventoryHint: $("inventoryHint"), inventoryModal: $("inventoryModal"),
     gpuActionModal: $("gpuActionModal"), gpuActionDetails: $("gpuActionDetails"),
-    playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus")
+    playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
+    sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
+    exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance")
   };
 
   function newState() {
@@ -115,6 +117,16 @@
     els.rate.textContent = number(totalRate()) + " CRYP/с";
     els.gpuCount.textContent = allGPUs().length + " / " + SLOT_COUNT + " встановлено";
     els.price.textContent = money(state.price);
+    $("infoPlayerName").textContent = state.playerName;
+    $("infoCash").textContent = money(state.cash);
+    $("infoCryp").textContent = number(state.cryp) + " CRYP";
+    $("infoRate").textContent = number(totalRate()) + " CRYP/с";
+    $("infoInstalled").textContent = allGPUs().length + " / " + SLOT_COUNT;
+    $("infoInventory").textContent = String(state.inventory.length);
+    $("infoPrice").textContent = money(state.price);
+    if (els.exchangePrice) els.exchangePrice.textContent = money(state.price);
+    if (els.exchangeBalance) els.exchangeBalance.textContent = "У тебе " + number(state.cryp) + " CRYP.";
+    updateSellPreview();
   }
 
   function renderFarm() {
@@ -287,6 +299,45 @@
     showToast(installedName + " встановлено на ферму.");
   }
 
+  function updateSellPreview() {
+    if (!els.sellAmount || !els.sellPreview) return;
+    const amount = Math.max(0, Number(els.sellAmount.value) || 0);
+    els.sellPreview.textContent = money(Math.min(amount, state.cryp) * state.price);
+  }
+
+  function sellCRYP() {
+    const amount = Number(els.sellAmount.value);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast("Введи кількість CRYP, яку хочеш продати.");
+      return;
+    }
+    if (amount > state.cryp + 1e-9) {
+      showToast("У тебе недостатньо CRYP для цієї операції.");
+      return;
+    }
+    const proceeds = amount * state.price;
+    state.cryp = Math.max(0, state.cryp - amount);
+    state.cash += proceeds;
+    els.sellAmount.value = "";
+    render();
+    save();
+    showToast("Продано " + number(amount) + " CRYP за " + money(proceeds) + ".");
+  }
+
+  function showPage(pageName) {
+    document.querySelectorAll(".page-section").forEach((section) => {
+      section.hidden = section.id !== "page-" + pageName;
+    });
+    document.querySelectorAll(".nav-button").forEach((button) => {
+      const active = button.dataset.page === pageName;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-current", active ? "page" : "false");
+    });
+    if (pageName === "shop") renderShop();
+    if (pageName === "farm") renderFarm();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   function render() {
     renderStats();
     renderFarm();
@@ -341,9 +392,22 @@
     if (event.key === "Escape" && !els.gpuActionModal.hidden) closeGPUActions();
   });
 
+  document.querySelectorAll(".nav-button").forEach((button) => {
+    button.addEventListener("click", () => showPage(button.dataset.page));
+  });
+
   $("openShop").addEventListener("click", () => {
-    document.querySelector(".shop-list").scrollIntoView({ behavior: "smooth", block: "center" });
-    showToast("Обери відеокарту в магазині, щоб купити її в інвентар.");
+    showPage("shop");
+    showToast("Обери відеокарту, щоб купити її в інвентар.");
+  });
+
+  els.sellAmount.addEventListener("input", updateSellPreview);
+  $("sellButton").addEventListener("click", sellCRYP);
+  $("sellAllButton").addEventListener("click", () => {
+    els.sellAmount.value = state.cryp > 0 ? String(state.cryp) : "";
+    updateSellPreview();
+    if (state.cryp > 0) sellCRYP();
+    else showToast("Поки що немає CRYP для продажу.");
   });
 
   els.playerName.value = state.playerName;
