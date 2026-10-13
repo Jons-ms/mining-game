@@ -128,7 +128,8 @@
         icon.textContent = gpu.icon || "▰";
         button.appendChild(icon);
         button.title = gpu.name;
-        button.addEventListener("click", () => showToast("Щоб перемістити карту, ця функція поки недоступна."));
+        button.title = gpu.name + " — натисни, щоб зняти карту";
+        button.addEventListener("click", () => removeGPUFromFarm(index));
       } else {
         const plus = document.createElement("span");
         plus.className = "plus";
@@ -218,6 +219,23 @@
     render();
     save();
     showToast(gpuType.name + " додано в інвентар.");
+  }
+
+  function removeGPUFromFarm(slotIndex) {
+    const gpu = state.slots[slotIndex];
+    if (!gpu) return;
+
+    state.inventory.push({
+      inventoryId: String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8),
+      id: gpu.id,
+      name: gpu.name,
+      icon: gpu.icon || "▰",
+      rate: gpu.rate || 0
+    });
+    state.slots[slotIndex] = null;
+    render();
+    save();
+    showToast(gpu.name + " знято з ферми та повернуто в інвентар.");
   }
 
   function openInventory(slotIndex) {
