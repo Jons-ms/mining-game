@@ -538,7 +538,7 @@
       authMessage.textContent = "";
       googleSignIn.disabled = true;
       try {
-        const provider = new firebase.app.auth.GoogleAuthProvider();
+        const provider = new window.firebase.auth.GoogleAuthProvider();
         await auth.signInWithPopup(provider);
       } catch (error) {
         showAuthError(error);
