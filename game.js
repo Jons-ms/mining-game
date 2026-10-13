@@ -44,6 +44,10 @@
         const state = { ...newState(), ...saved };
         state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null);
         state.inventory = Array.isArray(saved.inventory) ? saved.inventory : [];
+        // Preserve purchase cost for old saves and new cards.
+        const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
+        state.slots = state.slots.map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
+        state.inventory = state.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) }));
         // Convert the previous prototype's untouched starting balance to the new starting balance.
         if (saved.cash === 1000 && saved.cryp === 0 && state.slots.every((gpu) => !gpu)) state.cash = 300;
         state.price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(state.price) || 1));
@@ -224,7 +228,8 @@
       id: gpuType.id,
       name: gpuType.name,
       icon: gpuType.icon,
-      rate: gpuType.rate
+      rate: gpuType.rate,
+      cost: gpuType.price
     });
     render();
     save();
@@ -235,7 +240,8 @@
     const gpu = state.slots[slotIndex];
     if (!gpu) return;
     actionSlotIndex = slotIndex;
-    els.gpuActionDetails.textContent = gpu.name + " · " + number(gpu.rate) + " CRYP/с";
+    const resalePrice = (Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)) * 0.5;
+    els.gpuActionDetails.textContent = gpu.name + " · " + number(gpu.rate) + " CRYP/с · Продаж: " + money(resalePrice);
     els.gpuActionModal.hidden = false;
     $("removeGpuButton").focus();
   }
@@ -259,13 +265,32 @@
       id: gpu.id,
       name: gpu.name,
       icon: gpu.icon || "▰",
-      rate: gpu.rate || 0
+      rate: gpu.rate || 0,
+      cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)
     });
     state.slots[slotIndex] = null;
     closeGPUActions();
     render();
     save();
     showToast(gpu.name + " знято з ферми та повернуто в інвентар.");
+  }
+
+  function sellGPUFromFarm() {
+    if (actionSlotIndex === null) return;
+    const slotIndex = actionSlotIndex;
+    const gpu = state.slots[slotIndex];
+    if (!gpu) {
+      closeGPUActions();
+      return;
+    }
+    const originalCost = Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
+    const resalePrice = originalCost * 0.5;
+    state.cash += resalePrice;
+    state.slots[slotIndex] = null;
+    closeGPUActions();
+    render();
+    save();
+    showToast(gpu.name + " продано за " + money(resalePrice) + " (50% від собівартості).");
   }
 
   function openInventory(slotIndex) {
@@ -288,7 +313,7 @@
     const inventoryIndex = state.inventory.findIndex((gpu) => gpu.inventoryId === inventoryId);
     if (inventoryIndex < 0) return;
     const gpu = state.inventory.splice(inventoryIndex, 1)[0];
-    state.slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate };
+    state.slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate, cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0) };
     const installedName = gpu.name;
     closeInventory();
     render();
@@ -376,6 +401,7 @@
   $("closeGpuAction").addEventListener("click", closeGPUActions);
   $("cancelGpuAction").addEventListener("click", closeGPUActions);
   $("removeGpuButton").addEventListener("click", removeGPUFromFarm);
+  $("sellGpuButton").addEventListener("click", sellGPUFromFarm);
   els.gpuActionModal.addEventListener("click", (event) => {
     if (event.target === els.gpuActionModal) closeGPUActions();
   });
