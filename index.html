@@ -7,7 +7,7 @@
   <title>Майнінг-гра</title>
   <link rel="stylesheet" href="style.css?v=20261013-2">
   <script>
-    // Show early JavaScript failures on the login screen so they are diagnosable without DevTools.
+    // Diagnostics for login issues, including browser-native form validation.
     window.addEventListener("error", function (event) {
       const box = document.getElementById("authMessage");
       if (box && event.message) box.textContent = "Помилка JavaScript: " + event.message + (event.lineno ? " (рядок " + event.lineno + ")" : "");
@@ -17,12 +17,31 @@
       const reason = event.reason;
       if (box) box.textContent = "Помилка запуску: " + (reason && reason.message ? reason.message : String(reason || "невідома помилка"));
     });
+    document.addEventListener("DOMContentLoaded", function () {
+      const form = document.getElementById("authForm");
+      const username = document.getElementById("authUsername");
+      const password = document.getElementById("authPassword");
+      const button = document.getElementById("authSubmit");
+      const box = document.getElementById("authMessage");
+      if (button && box) button.addEventListener("click", function () {
+        if (!window.__crypAuthHandlersReady) box.textContent = "Сторінка натиснення бачить, але код входу не запустився. Онови сторінку; якщо повториться — повідом мене.";
+      }, true);
+      if (form && box) form.addEventListener("invalid", function (event) {
+        if (event.target === username) box.textContent = "Перевір нікнейм: 3–20 символів, лише латинські літери, цифри, _ або -.";
+        if (event.target === password) box.textContent = "Введи пароль довжиною щонайменше 6 символів.";
+      }, true);
+      window.setTimeout(function () {
+        if (!window.__crypAuthHandlersReady && box && !box.textContent) {
+          box.textContent = "Код входу не завантажився. Перевір інтернет і перезавантаж сторінку.";
+        }
+      }, 2500);
+    });
   </script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
-  <script src="game.js?v=20261013-6" defer></script>
+  <script src="game.js?v=20261013-7" defer></script>
 </head>
 <body>
 
