@@ -474,6 +474,7 @@
   // Firebase Authentication: local saves are separated by Firebase UID.
   const firebase = window.crypFirebase;
   const authScreen = $("authScreen");
+  const authLoading = $("authLoading");
   const gameApp = $("gameApp");
   const authForm = $("authForm");
   const authUsername = $("authUsername");
@@ -522,6 +523,7 @@
   }
 
   if (!firebase || !firebase.ready || !firebase.auth) {
+    if (authLoading) authLoading.hidden = true;
     authScreen.hidden = false;
     gameApp.hidden = true;
     authMessage.textContent = "Firebase не завантажився. Перевір інтернет і конфігурацію Firebase.";
@@ -606,6 +608,7 @@
       clearTimeout(cloudSaveTimer);
 
       if (!user) {
+        if (authLoading) authLoading.hidden = true;
         SAVE_KEY = null;
         currentUserUID = null;
         authScreen.hidden = false;
@@ -654,6 +657,7 @@
         }
         els.playerName.value = state.playerName;
         render();
+        if (authLoading) authLoading.hidden = true;
         authScreen.hidden = true;
         gameApp.hidden = false;
         if (signOutButton) signOutButton.hidden = false;
@@ -666,6 +670,7 @@
         }
       } catch (error) {
         console.error("Не вдалося відкрити гру після входу:", error);
+        if (authLoading) authLoading.hidden = true;
         authScreen.hidden = false;
         gameApp.hidden = true;
         authMessage.textContent = "Вхід виконано, але гра не змогла завантажитися. Перезавантаж сторінку; якщо проблема повториться, надішли скриншот.";
