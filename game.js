@@ -28,7 +28,7 @@
     gpuActionModal: $("gpuActionModal"), gpuActionDetails: $("gpuActionDetails"),
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
     sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
-    exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance")
+    exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus")
   };
 
   function newState() {
@@ -177,7 +177,21 @@
 
         const market = snapshot.data() || {};
         let price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(market.price) || 1));
-        let lastPriceAt = Number(market.lastPriceAt) || now;
+        let lastPriceAt = Number(market.lastPriceAt);
+
+        // Recover documents created by older versions that have no numeric
+        // timestamp (or have a timestamp accidentally stored in the future).
+        // Without this guard, "lastPriceAt = now" on every tick prevents
+        // the interval counter from ever reaching 1, so the course stays frozen.
+        if (!Number.isFinite(lastPriceAt) || lastPriceAt <= 0 || lastPriceAt > now + PRICE_UPDATE_INTERVAL) {
+          transaction.set(marketRef, {
+            price,
+            lastPriceAt: now,
+            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+          }, { merge: true });
+          return;
+        }
+
         const intervals = Math.min(120, Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL));
         if (intervals <= 0) return;
 
@@ -191,7 +205,10 @@
       });
     } catch (error) {
       console.error("Не вдалося оновити спільний курс CRYP:", error);
-      if (els.saveStatus) els.saveStatus.textContent = "Не вдалося підключити спільний курс — перевір правила Firestore";
+      if (els.marketStatus) {
+        els.marketStatus.textContent = "Помилка курсу: " + (error && error.code ? error.code : "перевір Firestore Rules та інтернет");
+      }
+      if (els.saveStatus) els.saveStatus.textContent = "Не вдалося оновити курс CRYP — дивись повідомлення на біржі";
     } finally {
       marketUpdateInProgress = false;
     }
@@ -212,10 +229,14 @@
         state.price = sharedPrice;
       }
       if (Number.isFinite(sharedTime) && sharedTime > 0) state.lastPriceAt = sharedTime;
+      if (els.marketStatus) els.marketStatus.textContent = "Спільний курс підключено · оновлення кожні 30 секунд";
       renderStats();
     }, (error) => {
       console.error("Не вдалося прочитати спільний курс CRYP:", error);
-      els.saveStatus.textContent = "Спільний курс недоступний — перевір правила Firestore";
+      if (els.marketStatus) {
+        els.marketStatus.textContent = "Не вдалося прочитати курс: " + (error && error.code ? error.code : "перевір Firestore Rules та інтернет");
+      }
+      els.saveStatus.textContent = "Спільний курс недоступний — дивись повідомлення на біржі";
     });
     updatePrice(Date.now());
   }
