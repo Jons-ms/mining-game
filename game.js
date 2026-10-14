@@ -134,15 +134,41 @@
     state.cryp += totalRate() * seconds;
   }
 
+  const PRICE_UPDATE_INTERVAL = 30000;
+  const PRICE_BASELINE = 1;
+  const PRICE_RANDOM_SWING = 0.10;
+
+  function nextPrice(price) {
+    // Random movement is between -10% and +10%.
+    const randomChange = (Math.random() * 2 - 1) * PRICE_RANDOM_SWING;
+
+    // Mean reversion: the further price is from 1.00 ₴, the stronger
+    // the gentle pull back toward it. At low prices this favours recovery.
+    // Clamp the drift so a single update remains bounded.
+    const recoveryDrift = Math.max(-0.08, Math.min(
+      0.08,
+      ((PRICE_BASELINE - price) / PRICE_BASELINE) * 0.08
+    ));
+
+    const change = randomChange + recoveryDrift;
+    return Math.max(MIN_PRICE, Math.min(MAX_PRICE, price * (1 + change)));
+  }
+
   function updatePrice(now) {
-    if (now - state.lastPriceAt >= 30000) {
-      const intervals = Math.min(20, Math.floor((now - state.lastPriceAt) / 30000));
-      for (let i = 0; i < intervals; i++) {
-        const change = (Math.random() - 0.5) * 0.18;
-        state.price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, state.price * (1 + change)));
-      }
+    if (!Number.isFinite(state.lastPriceAt) || state.lastPriceAt <= 0) {
       state.lastPriceAt = now;
+      return;
     }
+
+    if (now - state.lastPriceAt < PRICE_UPDATE_INTERVAL) return;
+
+    // Apply every elapsed 30-second step (up to one hour) instead of
+    // discarding most missed updates after a tab/device was inactive.
+    const intervals = Math.min(120, Math.floor((now - state.lastPriceAt) / PRICE_UPDATE_INTERVAL));
+    for (let i = 0; i < intervals; i++) {
+      state.price = nextPrice(state.price);
+    }
+    state.lastPriceAt += intervals * PRICE_UPDATE_INTERVAL;
   }
 
   function renderStats() {
