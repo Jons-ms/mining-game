@@ -6,9 +6,6 @@
   let cloudSaveReady = false;
   let cloudSaveTimer = null;
   let cloudSaveInProgress = Promise.resolve();
-  let marketRef = null;
-  let marketUnsubscribe = null;
-  let marketUpdateInProgress = false;
   const SLOT_COUNT = 16;
   const MIN_PRICE = 0.25;
   const MAX_PRICE = 7;
@@ -137,32 +134,15 @@
     state.cryp += totalRate() * seconds;
   }
 
-  // Shared CRYP market. Firestore market/current is the single source of truth.
-  // Clients may request a tick, but a transaction allows only one committed
-  // update per 30-second slot, even when many devices are open simultaneously.
+  // Local CRYP market: price data is stored in this browser's localStorage,
+  // not in Firestore. Each browser/device has its own independent market.
   const PRICE_UPDATE_INTERVAL = 10000;
   const PRICE_BASELINE = 1;
   const PRICE_MIN_FACTOR = 0.80;
-  const PRICE_MAX_FACTOR = 1.20;
   const MIN_TREND_TICKS = 3;
   const MAX_TREND_TICKS = 12;
-
-  function toMillis(value) {
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && value.trim() !== "") {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-    // Older versions or manual Firebase edits may have stored a Firestore Timestamp.
-    if (value && typeof value.toMillis === "function") {
-      const parsed = value.toMillis();
-      if (Number.isFinite(parsed)) return parsed;
-    }
-    if (value && typeof value.seconds === "number" && Number.isFinite(value.seconds)) {
-      return value.seconds * 1000;
-    }
-    return NaN;
-  }
+  const MARKET_STORAGE_KEY = "cryp-mining-market-v1";
+  let localMarket = loadLocalMarket();
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -170,144 +150,71 @@
     return Math.max(MIN_PRICE, Math.min(MAX_PRICE, parsed));
   }
 
-  // A trend lasts 3–12 price changes. Every change is substantial, but the
-  // trend direction remains stable to make the market feel alive rather than noisy.
+  function loadLocalMarket() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(MARKET_STORAGE_KEY) || "null");
+      if (saved && Number.isFinite(Number(saved.price)) && Number(saved.price) > 0) {
+        return {
+          price: clampPrice(saved.price),
+          lastPriceAt: Number.isFinite(Number(saved.lastPriceAt)) && Number(saved.lastPriceAt) > 0
+            ? Number(saved.lastPriceAt) : Date.now(),
+          trendDirection: Number(saved.trendDirection) === -1 ? -1 : (Number(saved.trendDirection) === 1 ? 1 : 0),
+          trendTicksLeft: Math.max(0, Number(saved.trendTicksLeft) || 0)
+        };
+      }
+    } catch (error) {
+      console.warn("Не вдалося прочитати локальний курс CRYP:", error);
+    }
+    return { price: PRICE_BASELINE, lastPriceAt: Date.now(), trendDirection: 0, trendTicksLeft: 0 };
+  }
+
+  function saveLocalMarket() {
+    try {
+      localStorage.setItem(MARKET_STORAGE_KEY, JSON.stringify(localMarket));
+    } catch (error) {
+      console.warn("Не вдалося зберегти локальний курс CRYP:", error);
+      if (els.marketStatus) els.marketStatus.textContent = "Браузер не дозволив зберегти курс локально.";
+    }
+  }
+
   function nextPriceState(previous) {
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
-
     if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
       direction = Math.random() < 0.5 ? -1 : 1;
       ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
     }
-
-    const factor = direction === 1
-      ? 1.01 + Math.random() * 0.19
-      : 0.80 + Math.random() * 0.19;
+    const factor = direction === 1 ? 1.01 + Math.random() * 0.19 : PRICE_MIN_FACTOR + Math.random() * 0.19;
     const price = clampPrice(clampPrice(previous.price) * factor);
     ticksLeft -= 1;
-
-    // Reaching a boundary ends the current trend so the price can move away next time.
     if (price >= MAX_PRICE || price <= MIN_PRICE) ticksLeft = 0;
-
-    return {
-      price: Number(price.toFixed(4)),
-      trendDirection: direction,
-      trendTicksLeft: ticksLeft
-    };
+    return { price: Number(price.toFixed(4)), trendDirection: direction, trendTicksLeft: ticksLeft };
   }
 
-  async function updatePrice(now = Date.now()) {
-    if (!marketRef || marketUpdateInProgress) return;
-    marketUpdateInProgress = true;
-
-    try {
-      await firebase.db.runTransaction(async (transaction) => {
-        const snapshot = await transaction.get(marketRef);
-
-        if (!snapshot.exists) {
-          // Initialisation only. The first price movement happens after one full interval.
-          transaction.set(marketRef, {
-            price: PRICE_BASELINE,
-            lastPriceAt: now,
-            trendDirection: 0,
-            trendTicksLeft: 0,
-            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-          });
-          return;
-        }
-
-        const market = snapshot.data() || {};
-        let price = clampPrice(market.price);
-        let lastPriceAt = toMillis(market.lastPriceAt);
-
-        // Migrate legacy/malformed timestamps once. Do not reset a valid timestamp
-        // on every poll, otherwise the 30-second counter can never complete.
-        if (!Number.isFinite(lastPriceAt) || lastPriceAt <= 0 || lastPriceAt > now + PRICE_UPDATE_INTERVAL) {
-          transaction.set(marketRef, {
-            price,
-            lastPriceAt: now,
-            trendDirection: Number(market.trendDirection) === -1 ? -1 : (Number(market.trendDirection) === 1 ? 1 : 0),
-            trendTicksLeft: Math.max(0, Number(market.trendTicksLeft) || 0),
-            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
-          return;
-        }
-
-        const dueTicks = Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL);
-        if (dueTicks <= 0) return;
-
-        let trendDirection = Number(market.trendDirection) || 0;
-        let trendTicksLeft = Number(market.trendTicksLeft) || 0;
-        // Cap catch-up work after a long outage. Move the clock forward by all elapsed
-        // intervals, while applying at most 120 changes to avoid expensive transactions.
+  function updatePrice(now = Date.now()) {
+    if (!localMarket) localMarket = loadLocalMarket();
+    const lastPriceAt = Number(localMarket.lastPriceAt);
+    if (!Number.isFinite(lastPriceAt) || lastPriceAt <= 0 || lastPriceAt > now + PRICE_UPDATE_INTERVAL) {
+      localMarket.lastPriceAt = now;
+    } else {
+      const dueTicks = Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL);
+      if (dueTicks > 0) {
         const ticksToApply = Math.min(dueTicks, 120);
         for (let i = 0; i < ticksToApply; i++) {
-          const next = nextPriceState({ price, trendDirection, trendTicksLeft });
-          price = next.price;
-          trendDirection = next.trendDirection;
-          trendTicksLeft = next.trendTicksLeft;
+          localMarket = { ...localMarket, ...nextPriceState(localMarket) };
         }
-
-        transaction.set(marketRef, {
-          price,
-          lastPriceAt: lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL,
-          trendDirection,
-          trendTicksLeft,
-          updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-        }, { merge: true });
-      });
-    } catch (error) {
-      console.error("Не вдалося оновити спільний курс CRYP:", error);
-      if (els.marketStatus) {
-        const code = error && error.code ? error.code : "unknown";
-        const detail = error && error.message ? error.message : "Невідома помилка";
-        const hint = code === "permission-denied"
-          ? " Firebase Rules забороняють запис у market/current."
-          : "";
-        els.marketStatus.textContent = "Помилка курсу (" + code + "): " + detail + hint;
+        localMarket.lastPriceAt = lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL;
       }
-      if (els.saveStatus) els.saveStatus.textContent = "Не вдалося оновити курс CRYP — дивись повідомлення на біржі";
-    } finally {
-      marketUpdateInProgress = false;
     }
-  }
-
-  function connectSharedMarket(db) {
-    if (typeof marketUnsubscribe === "function") marketUnsubscribe();
-    marketRef = db.collection("market").doc("current");
-    if (els.marketStatus) els.marketStatus.textContent = "Підключаємо спільний курс до Firebase…";
-
-    marketUnsubscribe = marketRef.onSnapshot((snapshot) => {
-      if (!snapshot.exists) {
-        updatePrice(Date.now());
-        return;
-      }
-
-      const market = snapshot.data() || {};
-      const sharedPrice = clampPrice(market.price);
-      const sharedTime = toMillis(market.lastPriceAt);
-      state.price = sharedPrice;
-      if (Number.isFinite(sharedTime) && sharedTime > 0) state.lastPriceAt = sharedTime;
-
-      if (els.marketStatus) {
-        const updated = Number.isFinite(sharedTime) && sharedTime > 0
-          ? new Date(sharedTime).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-          : "очікуємо першого оновлення";
-        els.marketStatus.textContent = "Спільний курс підключено · остання зміна: " + updated;
-      }
-      renderStats();
-    }, (error) => {
-      console.error("Не вдалося прочитати спільний курс CRYP:", error);
-      if (els.marketStatus) {
-        const code = error && error.code ? error.code : "unknown";
-        const detail = error && error.message ? error.message : "Невідома помилка";
-        els.marketStatus.textContent = "Не вдалося прочитати курс (" + code + "): " + detail;
-      }
-      els.saveStatus.textContent = "Спільний курс недоступний — дивись повідомлення на біржі";
-    });
-
-    updatePrice(Date.now());
+    state.price = clampPrice(localMarket.price);
+    state.lastPriceAt = localMarket.lastPriceAt;
+    saveLocalMarket();
+    if (els.marketStatus) {
+      const updated = new Date(localMarket.lastPriceAt).toLocaleTimeString("uk-UA", {
+        hour: "2-digit", minute: "2-digit", second: "2-digit"
+      });
+      els.marketStatus.textContent = "Локальний курс · остання зміна: " + updated + " · лише цей пристрій";
+    }
   }
 
   function renderStats() {
@@ -774,9 +681,6 @@
 
         SAVE_KEY = null;
         currentUserUID = null;
-        marketRef = null;
-        if (typeof marketUnsubscribe === "function") marketUnsubscribe();
-        marketUnsubscribe = null;
         authScreen.hidden = false;
         gameApp.hidden = true;
         if (signOutButton) signOutButton.hidden = true;
@@ -820,10 +724,8 @@
           }
         }
 
-        // Connect the shared market only AFTER loading this player's save.
-        // Player documents may contain an old personal price; they must never
-        // overwrite the shared market value after its listener starts.
-        if (db) connectSharedMarket(db);
+        // The CRYP market is stored locally, independent of Firestore player saves.
+        updatePrice(Date.now());
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
           state.playerName = user.displayName.slice(0, 20);
