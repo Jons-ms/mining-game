@@ -9,6 +9,7 @@
   let marketRef = null;
   let marketUnsubscribe = null;
   let marketUpdateInProgress = false;
+  let marketWriteError = null;
   const SLOT_COUNT = 16;
   const MIN_PRICE = 0.25;
   const MAX_PRICE = 7;
@@ -175,8 +176,17 @@
   function nextPriceState(previous) {
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
+    const currentPrice = clampPrice(previous.price);
 
-    if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+    // At a price boundary, force the next trend back into the valid price range.
+    // Otherwise repeated random outward trends can make the price appear frozen.
+    if (currentPrice >= MAX_PRICE) {
+      direction = -1;
+      ticksLeft = MIN_TREND_TICKS;
+    } else if (currentPrice <= MIN_PRICE) {
+      direction = 1;
+      ticksLeft = MIN_TREND_TICKS;
+    } else if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
       direction = Math.random() < 0.5 ? -1 : 1;
       ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
     }
@@ -184,7 +194,7 @@
     const factor = direction === 1
       ? 1.01 + Math.random() * 0.19
       : 0.80 + Math.random() * 0.19;
-    const price = clampPrice(clampPrice(previous.price) * factor);
+    const price = clampPrice(currentPrice * factor);
     ticksLeft -= 1;
 
     // Reaching a boundary ends the current trend so the price can move away next time.
@@ -264,6 +274,7 @@
     } catch (error) {
       console.error("Не вдалося оновити спільний курс CRYP:", error);
       const code = error && error.code ? error.code : "unknown";
+      marketWriteError = code;
       if (els.marketStatus) {
         const hints = {
           "permission-denied": "Firebase блокує доступ до market/current (Firestore Rules)",
@@ -295,7 +306,14 @@
       state.price = sharedPrice;
       if (Number.isFinite(sharedTime) && sharedTime > 0) state.lastPriceAt = sharedTime;
 
-      if (els.marketStatus) {
+      if (els.marketStatus && marketWriteError) {
+        const hints = {
+          "permission-denied": "Firebase блокує запис у market/current (Firestore Rules)",
+          "unavailable": "Firebase недоступний — перевір інтернет",
+          "failed-precondition": "Firestore відхилив операцію — перевір налаштування бази"
+        };
+        els.marketStatus.textContent = "Помилка оновлення курсу (" + marketWriteError + "): " + (hints[marketWriteError] || "перевір Firestore Rules та інтернет");
+      } else if (els.marketStatus) {
         const updated = Number.isFinite(sharedTime) && sharedTime > 0
           ? new Date(sharedTime).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
           : "очікуємо першого оновлення";
