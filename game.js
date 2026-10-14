@@ -139,11 +139,11 @@
     state.cryp += totalRate() * seconds;
   }
 
-  // Локальний активний ринок: курс оновлюється кожні 5 секунд і зберігається на пристрої.
+  // Локальний динамічний ринок: курс оновлюється кожні 5 секунд і зберігається на пристрої.
   const PRICE_UPDATE_INTERVAL = 5000;
   const PRICE_BASELINE = 1;
-  const MIN_TREND_TICKS = 2;
-  const MAX_TREND_TICKS = 5;
+  const MIN_TREND_TICKS = 1;
+  const MAX_TREND_TICKS = 3;
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -158,21 +158,43 @@
 
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
-      ticksLeft = MIN_TREND_TICKS;
+      ticksLeft = 1;
     } else if (currentPrice <= MIN_PRICE) {
       direction = 1;
-      ticksLeft = MIN_TREND_TICKS;
-    } else if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
-      // Біля нижньої межі частіше починається відскок угору, а біля верхньої — спад.
-      const upwardChance = currentPrice < 1.25 ? 0.72 : currentPrice > 3.5 ? 0.28 : 0.5;
-      direction = Math.random() < upwardChance ? 1 : -1;
-      ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
+      ticksLeft = 1;
+    } else {
+      // Короткі тренди та адаптивні шанси не дають курсу надовго застрягати внизу.
+      // Чим нижчий курс, тим сильніший шанс відновлення до 5–6 ₴.
+      const upwardChance = currentPrice < 0.75 ? 0.96
+        : currentPrice < 1.25 ? 0.93
+        : currentPrice < 2 ? 0.86
+        : currentPrice < 3 ? 0.76
+        : currentPrice < 4 ? 0.65
+        : currentPrice < 5.5 ? 0.52
+        : currentPrice < 6.25 ? 0.38
+        : 0.24;
+
+      // Якщо курс низький, не дозволяємо старому низхідному тренду затягувати падіння.
+      if (currentPrice < 1.25 && direction !== 1) {
+        direction = 1;
+        ticksLeft = 0;
+      }
+
+      if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+        direction = Math.random() < upwardChance ? 1 : -1;
+        ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
+      }
     }
 
-    // Помітніші коливання: зростання +8–25%, падіння −7–16% за один крок.
+    // Рух угору сильніший на низькому курсі; на високому курсі зростання стриманіше.
+    const riseMin = currentPrice < 1.25 ? 1.16 : currentPrice < 3 ? 1.12 : 1.08;
+    const riseMax = currentPrice < 1.25 ? 1.32 : currentPrice < 3 ? 1.25 : 1.20;
+    const fallMin = currentPrice < 1.25 ? 0.91 : 0.84;
+    const fallMax = currentPrice < 1.25 ? 0.98 : 0.93;
     const factor = direction === 1
-      ? 1.08 + Math.random() * 0.17
-      : 0.84 + Math.random() * 0.09;
+      ? riseMin + Math.random() * (riseMax - riseMin)
+      : fallMin + Math.random() * (fallMax - fallMin);
+
     const price = clampPrice(currentPrice * factor);
     ticksLeft -= 1;
     if (price >= MAX_PRICE || price <= MIN_PRICE) ticksLeft = 0;
