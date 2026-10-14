@@ -140,7 +140,7 @@
   // Shared CRYP market. Firestore market/current is the single source of truth.
   // Clients may request a tick, but a transaction allows only one committed
   // update per 30-second slot, even when many devices are open simultaneously.
-  const PRICE_UPDATE_INTERVAL = 30000;
+  const PRICE_UPDATE_INTERVAL = 10000;
   const PRICE_BASELINE = 1;
   const PRICE_MIN_FACTOR = 0.80;
   const PRICE_MAX_FACTOR = 1.20;
@@ -260,7 +260,12 @@
     } catch (error) {
       console.error("Не вдалося оновити спільний курс CRYP:", error);
       if (els.marketStatus) {
-        els.marketStatus.textContent = "Помилка курсу: " + (error && error.code ? error.code : "перевір Firestore Rules та інтернет");
+        const code = error && error.code ? error.code : "unknown";
+        const detail = error && error.message ? error.message : "Невідома помилка";
+        const hint = code === "permission-denied"
+          ? " Firebase Rules забороняють запис у market/current."
+          : "";
+        els.marketStatus.textContent = "Помилка курсу (" + code + "): " + detail + hint;
       }
       if (els.saveStatus) els.saveStatus.textContent = "Не вдалося оновити курс CRYP — дивись повідомлення на біржі";
     } finally {
@@ -295,7 +300,9 @@
     }, (error) => {
       console.error("Не вдалося прочитати спільний курс CRYP:", error);
       if (els.marketStatus) {
-        els.marketStatus.textContent = "Не вдалося прочитати курс: " + (error && error.code ? error.code : "перевір Firestore Rules та інтернет");
+        const code = error && error.code ? error.code : "unknown";
+        const detail = error && error.message ? error.message : "Невідома помилка";
+        els.marketStatus.textContent = "Не вдалося прочитати курс (" + code + "): " + detail;
       }
       els.saveStatus.textContent = "Спільний курс недоступний — дивись повідомлення на біржі";
     });
