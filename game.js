@@ -700,7 +700,6 @@
 
         const db = firebase.db;
         if (db) {
-          connectSharedMarket(db);
           const playerRef = db.collection("players").doc(user.uid);
           try {
             const snapshot = await playerRef.get();
@@ -730,6 +729,11 @@
             els.saveStatus.textContent = "Не вдалося підключити хмарне збереження — перевір правила Firestore";
           }
         }
+
+        // Connect the shared market only AFTER loading this player's save.
+        // Player documents may contain an old personal price; they must never
+        // overwrite the shared market value after its listener starts.
+        if (db) connectSharedMarket(db);
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
           state.playerName = user.displayName.slice(0, 20);
