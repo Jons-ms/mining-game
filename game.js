@@ -137,74 +137,123 @@
     state.cryp += totalRate() * seconds;
   }
 
+  // Shared CRYP market. Firestore market/current is the single source of truth.
+  // Clients may request a tick, but a transaction allows only one committed
+  // update per 30-second slot, even when many devices are open simultaneously.
   const PRICE_UPDATE_INTERVAL = 30000;
   const PRICE_BASELINE = 1;
-  const PRICE_RANDOM_SWING = 0.10;
+  const PRICE_MIN_FACTOR = 0.80;
+  const PRICE_MAX_FACTOR = 1.20;
+  const MIN_TREND_TICKS = 3;
+  const MAX_TREND_TICKS = 12;
 
-  function nextPrice(price) {
-    // Random movement is between -10% and +10%.
-    const randomChange = (Math.random() * 2 - 1) * PRICE_RANDOM_SWING;
-
-    // Mean reversion gently pulls the price toward 1.00 ₴.
-    const recoveryDrift = Math.max(-0.04, Math.min(
-      0.04,
-      ((PRICE_BASELINE - price) / PRICE_BASELINE) * 0.04
-    ));
-
-    let change = randomChange + recoveryDrift;
-    // Avoid a visually frozen market: ensure a meaningful move each interval
-    // unless the price has reached a configured boundary.
-    if (Math.abs(change) < 0.015) {
-      const fallbackDirection = price >= PRICE_BASELINE ? -1 : 1;
-      change = fallbackDirection * 0.015;
+  function toMillis(value) {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
     }
-    const next = Math.max(MIN_PRICE, Math.min(MAX_PRICE, price * (1 + change)));
-    return Number(next.toFixed(4));
+    // Older versions or manual Firebase edits may have stored a Firestore Timestamp.
+    if (value && typeof value.toMillis === "function") {
+      const parsed = value.toMillis();
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    if (value && typeof value.seconds === "number" && Number.isFinite(value.seconds)) {
+      return value.seconds * 1000;
+    }
+    return NaN;
   }
 
-  async function updatePrice(now) {
-    // The shared Firestore document is the source of truth for every player.
-    // A transaction ensures that two open clients cannot advance the same
-    // 30-second interval twice.
+  function clampPrice(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return PRICE_BASELINE;
+    return Math.max(MIN_PRICE, Math.min(MAX_PRICE, parsed));
+  }
+
+  // A trend lasts 3–12 price changes. Every change is substantial, but the
+  // trend direction remains stable to make the market feel alive rather than noisy.
+  function nextPriceState(previous) {
+    let direction = Number(previous.trendDirection);
+    let ticksLeft = Number(previous.trendTicksLeft);
+
+    if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+      direction = Math.random() < 0.5 ? -1 : 1;
+      ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
+    }
+
+    const factor = direction === 1
+      ? 1.01 + Math.random() * 0.19
+      : 0.80 + Math.random() * 0.19;
+    const price = clampPrice(clampPrice(previous.price) * factor);
+    ticksLeft -= 1;
+
+    // Reaching a boundary ends the current trend so the price can move away next time.
+    if (price >= MAX_PRICE || price <= MIN_PRICE) ticksLeft = 0;
+
+    return {
+      price: Number(price.toFixed(4)),
+      trendDirection: direction,
+      trendTicksLeft: ticksLeft
+    };
+  }
+
+  async function updatePrice(now = Date.now()) {
     if (!marketRef || marketUpdateInProgress) return;
     marketUpdateInProgress = true;
+
     try {
       await firebase.db.runTransaction(async (transaction) => {
         const snapshot = await transaction.get(marketRef);
+
         if (!snapshot.exists) {
+          // Initialisation only. The first price movement happens after one full interval.
           transaction.set(marketRef, {
-            price: 1,
+            price: PRICE_BASELINE,
             lastPriceAt: now,
+            trendDirection: 0,
+            trendTicksLeft: 0,
             updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
           });
           return;
         }
 
         const market = snapshot.data() || {};
-        let price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(market.price) || 1));
-        let lastPriceAt = Number(market.lastPriceAt);
+        let price = clampPrice(market.price);
+        let lastPriceAt = toMillis(market.lastPriceAt);
 
-        // Recover documents created by older versions that have no numeric
-        // timestamp (or have a timestamp accidentally stored in the future).
-        // Without this guard, "lastPriceAt = now" on every tick prevents
-        // the interval counter from ever reaching 1, so the course stays frozen.
+        // Migrate legacy/malformed timestamps once. Do not reset a valid timestamp
+        // on every poll, otherwise the 30-second counter can never complete.
         if (!Number.isFinite(lastPriceAt) || lastPriceAt <= 0 || lastPriceAt > now + PRICE_UPDATE_INTERVAL) {
           transaction.set(marketRef, {
             price,
             lastPriceAt: now,
+            trendDirection: Number(market.trendDirection) === -1 ? -1 : (Number(market.trendDirection) === 1 ? 1 : 0),
+            trendTicksLeft: Math.max(0, Number(market.trendTicksLeft) || 0),
             updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
           }, { merge: true });
           return;
         }
 
-        const intervals = Math.min(120, Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL));
-        if (intervals <= 0) return;
+        const dueTicks = Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL);
+        if (dueTicks <= 0) return;
 
-        for (let i = 0; i < intervals; i++) price = nextPrice(price);
-        lastPriceAt += intervals * PRICE_UPDATE_INTERVAL;
+        let trendDirection = Number(market.trendDirection) || 0;
+        let trendTicksLeft = Number(market.trendTicksLeft) || 0;
+        // Cap catch-up work after a long outage. Move the clock forward by all elapsed
+        // intervals, while applying at most 120 changes to avoid expensive transactions.
+        const ticksToApply = Math.min(dueTicks, 120);
+        for (let i = 0; i < ticksToApply; i++) {
+          const next = nextPriceState({ price, trendDirection, trendTicksLeft });
+          price = next.price;
+          trendDirection = next.trendDirection;
+          trendTicksLeft = next.trendTicksLeft;
+        }
+
         transaction.set(marketRef, {
           price,
-          lastPriceAt,
+          lastPriceAt: lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL,
+          trendDirection,
+          trendTicksLeft,
           updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
         }, { merge: true });
       });
@@ -223,18 +272,19 @@
     if (typeof marketUnsubscribe === "function") marketUnsubscribe();
     marketRef = db.collection("market").doc("current");
     if (els.marketStatus) els.marketStatus.textContent = "Підключаємо спільний курс до Firebase…";
+
     marketUnsubscribe = marketRef.onSnapshot((snapshot) => {
       if (!snapshot.exists) {
         updatePrice(Date.now());
         return;
       }
+
       const market = snapshot.data() || {};
-      const sharedPrice = Number(market.price);
-      const sharedTime = Number(market.lastPriceAt);
-      if (Number.isFinite(sharedPrice) && sharedPrice >= MIN_PRICE && sharedPrice <= MAX_PRICE) {
-        state.price = sharedPrice;
-      }
+      const sharedPrice = clampPrice(market.price);
+      const sharedTime = toMillis(market.lastPriceAt);
+      state.price = sharedPrice;
       if (Number.isFinite(sharedTime) && sharedTime > 0) state.lastPriceAt = sharedTime;
+
       if (els.marketStatus) {
         const updated = Number.isFinite(sharedTime) && sharedTime > 0
           ? new Date(sharedTime).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
@@ -249,6 +299,7 @@
       }
       els.saveStatus.textContent = "Спільний курс недоступний — дивись повідомлення на біржі";
     });
+
     updatePrice(Date.now());
   }
 
