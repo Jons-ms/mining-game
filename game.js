@@ -32,7 +32,7 @@
     const now = Date.now();
     return {
       playerName: "Гравець 1",
-      cash: 300,
+      cash: 490,
       cryp: 0,
       price: 1,
       slots: Array(SLOT_COUNT).fill(null),
@@ -52,8 +52,8 @@
         const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
         state.slots = state.slots.map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
         state.inventory = state.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) }));
-        // Convert the previous prototype's untouched starting balance to the new starting balance.
-        if (saved.cash === 1000 && saved.cryp === 0 && state.slots.every((gpu) => !gpu)) state.cash = 300;
+        // Update untouched older saves to the current starting balance without changing active progress.
+        if ((saved.cash === 300 || saved.cash === 1000) && saved.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
         state.price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(state.price) || 1));
         return state;
       }
@@ -633,6 +633,8 @@
                 state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null)
                   .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
                 state.inventory = Array.isArray(remote.inventory) ? remote.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
+                // Update untouched older cloud saves to the current starting balance.
+                if ((remote.cash === 300 || remote.cash === 1000) && remote.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
                 state.price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(state.price) || 1));
                 localStorage.setItem(SAVE_KEY, JSON.stringify(state));
               }
