@@ -41,7 +41,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
-  <script src="game.js?v=20261014-4" defer></script>
+  <script src="game.js?v=20261014-5" defer></script>
 </head>
 <body>
 
@@ -105,6 +105,7 @@
           <strong id="exchangePrice">1,00 ₴</strong>
           <small>за 1 CRYP</small>
         </div>
+        <p class="small-note" id="marketStatus" role="status" aria-live="polite">Підключаємо спільний курс…</p>
         <div class="exchange-form">
           <label for="sellAmount">Скільки CRYP продати?</label>
           <input id="sellAmount" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Наприклад, 10">
