@@ -140,7 +140,7 @@
   // Shared CRYP market. Firestore market/current is the single source of truth.
   // Clients may request a tick, but a transaction allows only one committed
   // update per 30-second slot, even when many devices are open simultaneously.
-  const PRICE_UPDATE_INTERVAL = 30000;
+  const PRICE_UPDATE_INTERVAL = 10000;
   const PRICE_BASELINE = 1;
   const PRICE_MIN_FACTOR = 0.80;
   const PRICE_MAX_FACTOR = 1.20;
