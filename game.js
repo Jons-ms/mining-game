@@ -6,6 +6,9 @@
   let cloudSaveReady = false;
   let cloudSaveTimer = null;
   let cloudSaveInProgress = Promise.resolve();
+  let marketRef = null;
+  let marketUnsubscribe = null;
+  let marketUpdateInProgress = false;
   const SLOT_COUNT = 16;
   const MIN_PRICE = 0.25;
   const MAX_PRICE = 7;
@@ -154,21 +157,67 @@
     return Math.max(MIN_PRICE, Math.min(MAX_PRICE, price * (1 + change)));
   }
 
-  function updatePrice(now) {
-    if (!Number.isFinite(state.lastPriceAt) || state.lastPriceAt <= 0) {
-      state.lastPriceAt = now;
-      return;
-    }
+  async function updatePrice(now) {
+    // The shared Firestore document is the source of truth for every player.
+    // A transaction ensures that two open clients cannot advance the same
+    // 30-second interval twice.
+    if (!marketRef || marketUpdateInProgress) return;
+    marketUpdateInProgress = true;
+    try {
+      await firebase.db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(marketRef);
+        if (!snapshot.exists) {
+          transaction.set(marketRef, {
+            price: 1,
+            lastPriceAt: now,
+            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+          });
+          return;
+        }
 
-    if (now - state.lastPriceAt < PRICE_UPDATE_INTERVAL) return;
+        const market = snapshot.data() || {};
+        let price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(market.price) || 1));
+        let lastPriceAt = Number(market.lastPriceAt) || now;
+        const intervals = Math.min(120, Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL));
+        if (intervals <= 0) return;
 
-    // Apply every elapsed 30-second step (up to one hour) instead of
-    // discarding most missed updates after a tab/device was inactive.
-    const intervals = Math.min(120, Math.floor((now - state.lastPriceAt) / PRICE_UPDATE_INTERVAL));
-    for (let i = 0; i < intervals; i++) {
-      state.price = nextPrice(state.price);
+        for (let i = 0; i < intervals; i++) price = nextPrice(price);
+        lastPriceAt += intervals * PRICE_UPDATE_INTERVAL;
+        transaction.set(marketRef, {
+          price,
+          lastPriceAt,
+          updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+      });
+    } catch (error) {
+      console.error("Не вдалося оновити спільний курс CRYP:", error);
+      if (els.saveStatus) els.saveStatus.textContent = "Не вдалося підключити спільний курс — перевір правила Firestore";
+    } finally {
+      marketUpdateInProgress = false;
     }
-    state.lastPriceAt += intervals * PRICE_UPDATE_INTERVAL;
+  }
+
+  function connectSharedMarket(db) {
+    if (typeof marketUnsubscribe === "function") marketUnsubscribe();
+    marketRef = db.collection("market").doc("current");
+    marketUnsubscribe = marketRef.onSnapshot((snapshot) => {
+      if (!snapshot.exists) {
+        updatePrice(Date.now());
+        return;
+      }
+      const market = snapshot.data() || {};
+      const sharedPrice = Number(market.price);
+      const sharedTime = Number(market.lastPriceAt);
+      if (Number.isFinite(sharedPrice) && sharedPrice >= MIN_PRICE && sharedPrice <= MAX_PRICE) {
+        state.price = sharedPrice;
+      }
+      if (Number.isFinite(sharedTime) && sharedTime > 0) state.lastPriceAt = sharedTime;
+      renderStats();
+    }, (error) => {
+      console.error("Не вдалося прочитати спільний курс CRYP:", error);
+      els.saveStatus.textContent = "Спільний курс недоступний — перевір правила Firestore";
+    });
+    updatePrice(Date.now());
   }
 
   function renderStats() {
@@ -635,6 +684,9 @@
 
         SAVE_KEY = null;
         currentUserUID = null;
+        marketRef = null;
+        if (typeof marketUnsubscribe === "function") marketUnsubscribe();
+        marketUnsubscribe = null;
         authScreen.hidden = false;
         gameApp.hidden = true;
         if (signOutButton) signOutButton.hidden = true;
@@ -648,6 +700,7 @@
 
         const db = firebase.db;
         if (db) {
+          connectSharedMarket(db);
           const playerRef = db.collection("players").doc(user.uid);
           try {
             const snapshot = await playerRef.get();
