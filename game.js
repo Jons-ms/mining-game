@@ -37,7 +37,9 @@
       price: 1,
       slots: Array(SLOT_COUNT).fill(null),
       inventory: [],
-      lastPriceAt: now
+      lastPriceAt: now,
+      trendDirection: 0,
+      trendTicksLeft: 0
     };
   }
 
@@ -137,16 +139,12 @@
     state.cryp += totalRate() * seconds;
   }
 
-  // Shared CRYP market: all signed-in players use Firestore market/current.
+  // Локальний курс CRYP: він зберігається разом із грою в localStorage і не скидається під час входу.
   const PRICE_UPDATE_INTERVAL = 10000;
   const PRICE_BASELINE = 1;
   const PRICE_MIN_FACTOR = 0.80;
   const MIN_TREND_TICKS = 3;
   const MAX_TREND_TICKS = 12;
-  let sharedMarket = { price: PRICE_BASELINE, lastPriceAt: 0, trendDirection: 0, trendTicksLeft: 0 };
-  let marketUnsubscribe = null;
-  let marketUpdateInProgress = false;
-  let marketWriteError = "";
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -159,7 +157,6 @@
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
 
-    // Reverse direction at either boundary so the market never gets stuck.
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
       ticksLeft = MIN_TREND_TICKS;
@@ -180,127 +177,24 @@
     return { price: Number(price.toFixed(4)), trendDirection: direction, trendTicksLeft: ticksLeft };
   }
 
-  function marketErrorMessage(error) {
-    const code = error && error.code ? error.code : "unknown";
-    const hints = {
-      "permission-denied": "Firebase Rules забороняють доступ до market/current",
-      "unavailable": "Firebase недоступний — перевір інтернет",
-      "failed-precondition": "Firestore не готовий до цієї операції",
-      "unauthenticated": "Увійди в акаунт, щоб підключити спільний курс"
-    };
-    return "Помилка спільного курсу (" + code + "): " + (hints[code] || "перевір підключення та правила Firestore");
-  }
-
-  function connectSharedMarket(db) {
-    if (marketUnsubscribe) {
-      marketUnsubscribe();
-      marketUnsubscribe = null;
-    }
-    if (!db || !currentUserUID) {
-      if (els.marketStatus) els.marketStatus.textContent = "Спільний курс очікує входу в акаунт.";
-      return;
-    }
-
-    const marketRef = db.collection("market").doc("current");
-    if (els.marketStatus) els.marketStatus.textContent = "Підключаємо спільний курс…";
-
-    marketUnsubscribe = marketRef.onSnapshot((snapshot) => {
-      if (!snapshot.exists) {
-        if (els.marketStatus) els.marketStatus.textContent = "Створюємо спільний курс…";
-        updatePrice(Date.now());
-        return;
-      }
-
-      const data = snapshot.data() || {};
-      const parsedPrice = Number(data.price);
-      const parsedTime = Number(data.lastPriceAt);
-      sharedMarket = {
-        price: clampPrice(parsedPrice),
-        lastPriceAt: Number.isFinite(parsedTime) && parsedTime > 0 ? parsedTime : 0,
-        trendDirection: Number(data.trendDirection) === -1 ? -1 : (Number(data.trendDirection) === 1 ? 1 : 0),
-        trendTicksLeft: Math.max(0, Number(data.trendTicksLeft) || 0)
-      };
-      state.price = sharedMarket.price;
-      state.lastPriceAt = sharedMarket.lastPriceAt;
-      marketWriteError = "";
-      if (els.marketStatus) {
-        const updated = sharedMarket.lastPriceAt
-          ? new Date(sharedMarket.lastPriceAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-          : "очікуємо першого оновлення";
-        els.marketStatus.textContent = "Спільний курс підключено · остання зміна: " + updated;
-      }
-      renderStats();
-    }, (error) => {
-      marketWriteError = error && error.code ? error.code : "unknown";
-      console.error("Не вдалося слухати спільний курс CRYP:", error);
-      if (els.marketStatus) els.marketStatus.textContent = marketErrorMessage(error);
-    });
-  }
-
   function updatePrice(now = Date.now()) {
-    const db = window.crypFirebase && window.crypFirebase.db;
-    if (!db || !currentUserUID || marketUpdateInProgress) return;
-    if (marketWriteError) {
-      if (els.marketStatus) els.marketStatus.textContent = "Помилка спільного курсу (" + marketWriteError + "). " +
-        (marketWriteError === "permission-denied" ? "Перевір Firebase Console → Firestore Database → Rules." : "Перевір підключення Firebase.");
-      return;
-    }
-    if (sharedMarket.lastPriceAt > 0 && now - sharedMarket.lastPriceAt < PRICE_UPDATE_INTERVAL) return;
+    const lastAt = Number(state.lastPriceAt) || now;
+    if (now - lastAt < PRICE_UPDATE_INTERVAL) return;
 
-    marketUpdateInProgress = true;
-    const marketRef = db.collection("market").doc("current");
-    db.runTransaction(async (transaction) => {
-      const snapshot = await transaction.get(marketRef);
-      const transactionNow = Date.now();
+    const dueTicks = Math.min(120, Math.floor((now - lastAt) / PRICE_UPDATE_INTERVAL));
+    let next = {
+      price: clampPrice(state.price),
+      trendDirection: Number(state.trendDirection) || 0,
+      trendTicksLeft: Number(state.trendTicksLeft) || 0
+    };
+    for (let i = 0; i < dueTicks; i++) next = { ...next, ...nextPriceState(next) };
 
-      if (!snapshot.exists) {
-        transaction.set(marketRef, {
-          price: PRICE_BASELINE,
-          lastPriceAt: transactionNow,
-          trendDirection: 0,
-          trendTicksLeft: 0
-        });
-        return;
-      }
-
-      const data = snapshot.data() || {};
-      const oldPrice = clampPrice(data.price);
-      const oldTime = Number(data.lastPriceAt);
-      const validOldTime = Number.isFinite(oldTime) && oldTime > 0 && oldTime <= transactionNow
-        ? oldTime : transactionNow;
-      const previous = {
-        price: oldPrice,
-        trendDirection: Number(data.trendDirection) === -1 ? -1 : (Number(data.trendDirection) === 1 ? 1 : 0),
-        trendTicksLeft: Math.max(0, Number(data.trendTicksLeft) || 0)
-      };
-      const dueTicks = Math.floor((transactionNow - validOldTime) / PRICE_UPDATE_INTERVAL);
-
-      if (dueTicks <= 0) {
-        if (validOldTime !== oldTime || oldPrice !== Number(data.price)) {
-          transaction.set(marketRef, { ...previous, price: oldPrice, lastPriceAt: validOldTime });
-        }
-        return;
-      }
-
-      let next = previous;
-      const ticksToApply = Math.min(dueTicks, 120);
-      for (let i = 0; i < ticksToApply; i++) next = { ...next, ...nextPriceState(next) };
-
-      transaction.set(marketRef, {
-        price: next.price,
-        lastPriceAt: validOldTime + ticksToApply * PRICE_UPDATE_INTERVAL,
-        trendDirection: next.trendDirection,
-        trendTicksLeft: next.trendTicksLeft
-      });
-    }).then(() => {
-      marketWriteError = "";
-    }).catch((error) => {
-      marketWriteError = error && error.code ? error.code : "unknown";
-      console.error("Не вдалося оновити спільний курс CRYP:", error);
-      if (els.marketStatus) els.marketStatus.textContent = marketErrorMessage(error);
-    }).finally(() => {
-      marketUpdateInProgress = false;
-    });
+    state.price = next.price;
+    state.trendDirection = next.trendDirection;
+    state.trendTicksLeft = next.trendTicksLeft;
+    state.lastPriceAt = lastAt + dueTicks * PRICE_UPDATE_INTERVAL;
+    if (els.marketStatus) els.marketStatus.textContent = "Курс зберігається на цьому пристрої.";
+    save();
   }
 
   function renderStats() {
@@ -787,13 +681,21 @@
               const remote = snapshot.data();
               if (remote && Array.isArray(remote.slots)) {
                 const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
+                // Preserve the local exchange rate when cloud player progress is loaded.
+                const localPrice = clampPrice(state.price);
+                const localPriceAt = Number(state.lastPriceAt) || Date.now();
+                const localTrendDirection = Number(state.trendDirection) || 0;
+                const localTrendTicksLeft = Number(state.trendTicksLeft) || 0;
                 state = { ...newState(), ...remote };
+                state.price = localPrice;
+                state.lastPriceAt = localPriceAt;
+                state.trendDirection = localTrendDirection;
+                state.trendTicksLeft = localTrendTicksLeft;
                 state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null)
                   .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
                 state.inventory = Array.isArray(remote.inventory) ? remote.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
                 // Update untouched older cloud saves to the current starting balance.
                 if ((remote.cash === 300 || remote.cash === 1000) && remote.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
-                state.price = Math.max(MIN_PRICE, Math.min(MAX_PRICE, Number(state.price) || 1));
                 localStorage.setItem(SAVE_KEY, JSON.stringify(state));
               }
             } else {
@@ -814,9 +716,8 @@
           }
         }
 
-        // Subscribe to the single shared market document after authentication.
-        connectSharedMarket(firebase && firebase.db);
-        updatePrice(Date.now());
+        // Exchange rate is local-only and must not be initialized from Firestore.
+        if (els.marketStatus) els.marketStatus.textContent = "Курс зберігається на цьому пристрої.";
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
           state.playerName = user.displayName.slice(0, 20);
