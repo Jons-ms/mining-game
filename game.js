@@ -100,6 +100,9 @@
       cloudSaveTimer = setTimeout(() => {
         const uid = currentUserUID;
         const stateToSave = JSON.parse(JSON.stringify(state));
+        // Never write the exchange price or its timer to the player's Firestore document.
+        delete stateToSave.price;
+        delete stateToSave.lastPriceAt;
         cloudSaveInProgress = cloudSaveInProgress
           .catch(() => {})
           .then(() => {
@@ -712,8 +715,12 @@
               }
             } else {
               // First login on a device uploads its existing local save instead of discarding it.
+              const firstCloudSave = { ...state };
+              // The exchange price belongs only in localStorage, not in Firestore.
+              delete firstCloudSave.price;
+              delete firstCloudSave.lastPriceAt;
               await playerRef.set({
-                ...state,
+                ...firstCloudSave,
                 updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
               });
             }
