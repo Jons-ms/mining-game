@@ -145,16 +145,21 @@
     // Random movement is between -10% and +10%.
     const randomChange = (Math.random() * 2 - 1) * PRICE_RANDOM_SWING;
 
-    // Mean reversion: the further price is from 1.00 ₴, the stronger
-    // the gentle pull back toward it. At low prices this favours recovery.
-    // Clamp the drift so a single update remains bounded.
-    const recoveryDrift = Math.max(-0.08, Math.min(
-      0.08,
-      ((PRICE_BASELINE - price) / PRICE_BASELINE) * 0.08
+    // Mean reversion gently pulls the price toward 1.00 ₴.
+    const recoveryDrift = Math.max(-0.04, Math.min(
+      0.04,
+      ((PRICE_BASELINE - price) / PRICE_BASELINE) * 0.04
     ));
 
-    const change = randomChange + recoveryDrift;
-    return Math.max(MIN_PRICE, Math.min(MAX_PRICE, price * (1 + change)));
+    let change = randomChange + recoveryDrift;
+    // Avoid a visually frozen market: ensure a meaningful move each interval
+    // unless the price has reached a configured boundary.
+    if (Math.abs(change) < 0.015) {
+      const fallbackDirection = price >= PRICE_BASELINE ? -1 : 1;
+      change = fallbackDirection * 0.015;
+    }
+    const next = Math.max(MIN_PRICE, Math.min(MAX_PRICE, price * (1 + change)));
+    return Number(next.toFixed(4));
   }
 
   async function updatePrice(now) {
@@ -217,6 +222,7 @@
   function connectSharedMarket(db) {
     if (typeof marketUnsubscribe === "function") marketUnsubscribe();
     marketRef = db.collection("market").doc("current");
+    if (els.marketStatus) els.marketStatus.textContent = "Підключаємо спільний курс до Firebase…";
     marketUnsubscribe = marketRef.onSnapshot((snapshot) => {
       if (!snapshot.exists) {
         updatePrice(Date.now());
@@ -229,7 +235,12 @@
         state.price = sharedPrice;
       }
       if (Number.isFinite(sharedTime) && sharedTime > 0) state.lastPriceAt = sharedTime;
-      if (els.marketStatus) els.marketStatus.textContent = "Спільний курс підключено · оновлення кожні 30 секунд";
+      if (els.marketStatus) {
+        const updated = Number.isFinite(sharedTime) && sharedTime > 0
+          ? new Date(sharedTime).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+          : "очікуємо першого оновлення";
+        els.marketStatus.textContent = "Спільний курс підключено · остання зміна: " + updated;
+      }
       renderStats();
     }, (error) => {
       console.error("Не вдалося прочитати спільний курс CRYP:", error);
