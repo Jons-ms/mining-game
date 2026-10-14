@@ -139,12 +139,11 @@
     state.cryp += totalRate() * seconds;
   }
 
-  // Локальний курс CRYP: він зберігається разом із грою в localStorage і не скидається під час входу.
-  const PRICE_UPDATE_INTERVAL = 10000;
+  // Локальний активний ринок: курс оновлюється кожні 5 секунд і зберігається на пристрої.
+  const PRICE_UPDATE_INTERVAL = 5000;
   const PRICE_BASELINE = 1;
-  const PRICE_MIN_FACTOR = 0.80;
-  const MIN_TREND_TICKS = 3;
-  const MAX_TREND_TICKS = 12;
+  const MIN_TREND_TICKS = 2;
+  const MAX_TREND_TICKS = 5;
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -164,13 +163,16 @@
       direction = 1;
       ticksLeft = MIN_TREND_TICKS;
     } else if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
-      direction = Math.random() < 0.5 ? -1 : 1;
+      // Біля нижньої межі частіше починається відскок угору, а біля верхньої — спад.
+      const upwardChance = currentPrice < 1.25 ? 0.72 : currentPrice > 3.5 ? 0.28 : 0.5;
+      direction = Math.random() < upwardChance ? 1 : -1;
       ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
     }
 
+    // Помітніші коливання: зростання +8–25%, падіння −7–16% за один крок.
     const factor = direction === 1
-      ? 1.01 + Math.random() * 0.19
-      : PRICE_MIN_FACTOR + Math.random() * 0.19;
+      ? 1.08 + Math.random() * 0.17
+      : 0.84 + Math.random() * 0.09;
     const price = clampPrice(currentPrice * factor);
     ticksLeft -= 1;
     if (price >= MAX_PRICE || price <= MIN_PRICE) ticksLeft = 0;
