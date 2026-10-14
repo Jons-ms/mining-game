@@ -137,15 +137,16 @@
     state.cryp += totalRate() * seconds;
   }
 
-  // Local CRYP market: price data is stored in this browser's localStorage,
-  // not in Firestore. Each browser/device has its own independent market.
+  // Shared CRYP market: all signed-in players use Firestore market/current.
   const PRICE_UPDATE_INTERVAL = 10000;
   const PRICE_BASELINE = 1;
   const PRICE_MIN_FACTOR = 0.80;
   const MIN_TREND_TICKS = 3;
   const MAX_TREND_TICKS = 12;
-  const MARKET_STORAGE_KEY = "cryp-mining-market-v1";
-  let localMarket = loadLocalMarket();
+  let sharedMarket = { price: PRICE_BASELINE, lastPriceAt: 0, trendDirection: 0, trendTicksLeft: 0 };
+  let marketUnsubscribe = null;
+  let marketUpdateInProgress = false;
+  let marketWriteError = "";
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -153,71 +154,153 @@
     return Math.max(MIN_PRICE, Math.min(MAX_PRICE, parsed));
   }
 
-  function loadLocalMarket() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(MARKET_STORAGE_KEY) || "null");
-      if (saved && Number.isFinite(Number(saved.price)) && Number(saved.price) > 0) {
-        return {
-          price: clampPrice(saved.price),
-          lastPriceAt: Number.isFinite(Number(saved.lastPriceAt)) && Number(saved.lastPriceAt) > 0
-            ? Number(saved.lastPriceAt) : Date.now(),
-          trendDirection: Number(saved.trendDirection) === -1 ? -1 : (Number(saved.trendDirection) === 1 ? 1 : 0),
-          trendTicksLeft: Math.max(0, Number(saved.trendTicksLeft) || 0)
-        };
-      }
-    } catch (error) {
-      console.warn("Не вдалося прочитати локальний курс CRYP:", error);
-    }
-    return { price: PRICE_BASELINE, lastPriceAt: Date.now(), trendDirection: 0, trendTicksLeft: 0 };
-  }
-
-  function saveLocalMarket() {
-    try {
-      localStorage.setItem(MARKET_STORAGE_KEY, JSON.stringify(localMarket));
-    } catch (error) {
-      console.warn("Не вдалося зберегти локальний курс CRYP:", error);
-      if (els.marketStatus) els.marketStatus.textContent = "Браузер не дозволив зберегти курс локально.";
-    }
-  }
-
   function nextPriceState(previous) {
+    const currentPrice = clampPrice(previous.price);
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
-    if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+
+    // Reverse direction at either boundary so the market never gets stuck.
+    if (currentPrice >= MAX_PRICE) {
+      direction = -1;
+      ticksLeft = MIN_TREND_TICKS;
+    } else if (currentPrice <= MIN_PRICE) {
+      direction = 1;
+      ticksLeft = MIN_TREND_TICKS;
+    } else if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
       direction = Math.random() < 0.5 ? -1 : 1;
       ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
     }
-    const factor = direction === 1 ? 1.01 + Math.random() * 0.19 : PRICE_MIN_FACTOR + Math.random() * 0.19;
-    const price = clampPrice(clampPrice(previous.price) * factor);
+
+    const factor = direction === 1
+      ? 1.01 + Math.random() * 0.19
+      : PRICE_MIN_FACTOR + Math.random() * 0.19;
+    const price = clampPrice(currentPrice * factor);
     ticksLeft -= 1;
     if (price >= MAX_PRICE || price <= MIN_PRICE) ticksLeft = 0;
     return { price: Number(price.toFixed(4)), trendDirection: direction, trendTicksLeft: ticksLeft };
   }
 
-  function updatePrice(now = Date.now()) {
-    if (!localMarket) localMarket = loadLocalMarket();
-    const lastPriceAt = Number(localMarket.lastPriceAt);
-    if (!Number.isFinite(lastPriceAt) || lastPriceAt <= 0 || lastPriceAt > now + PRICE_UPDATE_INTERVAL) {
-      localMarket.lastPriceAt = now;
-    } else {
-      const dueTicks = Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL);
-      if (dueTicks > 0) {
-        const ticksToApply = Math.min(dueTicks, 120);
-        for (let i = 0; i < ticksToApply; i++) {
-          localMarket = { ...localMarket, ...nextPriceState(localMarket) };
-        }
-        localMarket.lastPriceAt = lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL;
+  function marketErrorMessage(error) {
+    const code = error && error.code ? error.code : "unknown";
+    const hints = {
+      "permission-denied": "Firebase Rules забороняють доступ до market/current",
+      "unavailable": "Firebase недоступний — перевір інтернет",
+      "failed-precondition": "Firestore не готовий до цієї операції",
+      "unauthenticated": "Увійди в акаунт, щоб підключити спільний курс"
+    };
+    return "Помилка спільного курсу (" + code + "): " + (hints[code] || "перевір підключення та правила Firestore");
+  }
+
+  function connectSharedMarket(db) {
+    if (marketUnsubscribe) {
+      marketUnsubscribe();
+      marketUnsubscribe = null;
+    }
+    if (!db || !currentUserUID) {
+      if (els.marketStatus) els.marketStatus.textContent = "Спільний курс очікує входу в акаунт.";
+      return;
+    }
+
+    const marketRef = db.collection("market").doc("current");
+    if (els.marketStatus) els.marketStatus.textContent = "Підключаємо спільний курс…";
+
+    marketUnsubscribe = marketRef.onSnapshot((snapshot) => {
+      if (!snapshot.exists) {
+        if (els.marketStatus) els.marketStatus.textContent = "Створюємо спільний курс…";
+        updatePrice(Date.now());
+        return;
       }
+
+      const data = snapshot.data() || {};
+      const parsedPrice = Number(data.price);
+      const parsedTime = Number(data.lastPriceAt);
+      sharedMarket = {
+        price: clampPrice(parsedPrice),
+        lastPriceAt: Number.isFinite(parsedTime) && parsedTime > 0 ? parsedTime : 0,
+        trendDirection: Number(data.trendDirection) === -1 ? -1 : (Number(data.trendDirection) === 1 ? 1 : 0),
+        trendTicksLeft: Math.max(0, Number(data.trendTicksLeft) || 0)
+      };
+      state.price = sharedMarket.price;
+      state.lastPriceAt = sharedMarket.lastPriceAt;
+      marketWriteError = "";
+      if (els.marketStatus) {
+        const updated = sharedMarket.lastPriceAt
+          ? new Date(sharedMarket.lastPriceAt).toLocaleTimeString("uk-UA", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+          : "очікуємо першого оновлення";
+        els.marketStatus.textContent = "Спільний курс підключено · остання зміна: " + updated;
+      }
+      renderStats();
+    }, (error) => {
+      marketWriteError = error && error.code ? error.code : "unknown";
+      console.error("Не вдалося слухати спільний курс CRYP:", error);
+      if (els.marketStatus) els.marketStatus.textContent = marketErrorMessage(error);
+    });
+  }
+
+  function updatePrice(now = Date.now()) {
+    const db = window.crypFirebase && window.crypFirebase.db;
+    if (!db || !currentUserUID || marketUpdateInProgress) return;
+    if (marketWriteError) {
+      if (els.marketStatus) els.marketStatus.textContent = "Помилка спільного курсу (" + marketWriteError + "). " +
+        (marketWriteError === "permission-denied" ? "Перевір Firebase Console → Firestore Database → Rules." : "Перевір підключення Firebase.");
+      return;
     }
-    state.price = clampPrice(localMarket.price);
-    state.lastPriceAt = localMarket.lastPriceAt;
-    saveLocalMarket();
-    if (els.marketStatus) {
-      const updated = new Date(localMarket.lastPriceAt).toLocaleTimeString("uk-UA", {
-        hour: "2-digit", minute: "2-digit", second: "2-digit"
+    if (sharedMarket.lastPriceAt > 0 && now - sharedMarket.lastPriceAt < PRICE_UPDATE_INTERVAL) return;
+
+    marketUpdateInProgress = true;
+    const marketRef = db.collection("market").doc("current");
+    db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(marketRef);
+      const transactionNow = Date.now();
+
+      if (!snapshot.exists) {
+        transaction.set(marketRef, {
+          price: PRICE_BASELINE,
+          lastPriceAt: transactionNow,
+          trendDirection: 0,
+          trendTicksLeft: 0
+        });
+        return;
+      }
+
+      const data = snapshot.data() || {};
+      const oldPrice = clampPrice(data.price);
+      const oldTime = Number(data.lastPriceAt);
+      const validOldTime = Number.isFinite(oldTime) && oldTime > 0 && oldTime <= transactionNow
+        ? oldTime : transactionNow;
+      const previous = {
+        price: oldPrice,
+        trendDirection: Number(data.trendDirection) === -1 ? -1 : (Number(data.trendDirection) === 1 ? 1 : 0),
+        trendTicksLeft: Math.max(0, Number(data.trendTicksLeft) || 0)
+      };
+      const dueTicks = Math.floor((transactionNow - validOldTime) / PRICE_UPDATE_INTERVAL);
+
+      if (dueTicks <= 0) {
+        if (validOldTime !== oldTime || oldPrice !== Number(data.price)) {
+          transaction.set(marketRef, { ...previous, price: oldPrice, lastPriceAt: validOldTime });
+        }
+        return;
+      }
+
+      let next = previous;
+      const ticksToApply = Math.min(dueTicks, 120);
+      for (let i = 0; i < ticksToApply; i++) next = { ...next, ...nextPriceState(next) };
+
+      transaction.set(marketRef, {
+        price: next.price,
+        lastPriceAt: validOldTime + ticksToApply * PRICE_UPDATE_INTERVAL,
+        trendDirection: next.trendDirection,
+        trendTicksLeft: next.trendTicksLeft
       });
-      els.marketStatus.textContent = "Локальний курс · остання зміна: " + updated + " · лише цей пристрій";
-    }
+    }).then(() => {
+      marketWriteError = "";
+    }).catch((error) => {
+      marketWriteError = error && error.code ? error.code : "unknown";
+      console.error("Не вдалося оновити спільний курс CRYP:", error);
+      if (els.marketStatus) els.marketStatus.textContent = marketErrorMessage(error);
+    }).finally(() => {
+      marketUpdateInProgress = false;
+    });
   }
 
   function renderStats() {
@@ -731,7 +814,8 @@
           }
         }
 
-        // The CRYP market is stored locally, independent of Firestore player saves.
+        // Subscribe to the single shared market document after authentication.
+        connectSharedMarket(firebase && firebase.db);
         updatePrice(Date.now());
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
