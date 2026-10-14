@@ -139,7 +139,7 @@
 
   // Shared CRYP market. Firestore market/current is the single source of truth.
   // Clients may request a tick, but a transaction allows only one committed
-  // update per 30-second slot, even when many devices are open simultaneously.
+  // update per 10-second interval, even when many devices are open simultaneously.
   const PRICE_UPDATE_INTERVAL = 10000;
   const PRICE_BASELINE = 1;
   const PRICE_MIN_FACTOR = 0.80;
@@ -198,15 +198,17 @@
   }
 
   async function updatePrice(now = Date.now()) {
-    if (!marketRef || marketUpdateInProgress) return;
+    // marketRef is assigned only after Firebase Auth has identified the player.
+    if (!marketRef || !firebase?.db || marketUpdateInProgress) return;
     marketUpdateInProgress = true;
 
     try {
       await firebase.db.runTransaction(async (transaction) => {
+        // Always read the shared document inside the transaction. Firestore will
+        // retry if another device updates it at the same time.
         const snapshot = await transaction.get(marketRef);
 
         if (!snapshot.exists) {
-          // Initialisation only. The first price movement happens after one full interval.
           transaction.set(marketRef, {
             price: PRICE_BASELINE,
             lastPriceAt: now,
@@ -221,8 +223,7 @@
         let price = clampPrice(market.price);
         let lastPriceAt = toMillis(market.lastPriceAt);
 
-        // Migrate legacy/malformed timestamps once. Do not reset a valid timestamp
-        // on every poll, otherwise the 30-second counter can never complete.
+        // Repair a missing, invalid, or implausibly future timestamp only once.
         if (!Number.isFinite(lastPriceAt) || lastPriceAt <= 0 || lastPriceAt > now + PRICE_UPDATE_INTERVAL) {
           transaction.set(marketRef, {
             price,
@@ -234,24 +235,27 @@
           return;
         }
 
+        // The shared timestamp, not a device-local timer, decides whether a tick is due.
         const dueTicks = Math.floor((now - lastPriceAt) / PRICE_UPDATE_INTERVAL);
-        if (dueTicks <= 0) return;
+        if (dueTicks < 1) return;
 
         let trendDirection = Number(market.trendDirection) || 0;
         let trendTicksLeft = Number(market.trendTicksLeft) || 0;
-        // Cap catch-up work after a long outage. Move the clock forward by all elapsed
-        // intervals, while applying at most 120 changes to avoid expensive transactions.
+
+        // Apply elapsed ticks, with a safety cap for clients returning after a long break.
         const ticksToApply = Math.min(dueTicks, 120);
-        for (let i = 0; i < ticksToApply; i++) {
+        for (let i = 0; i < ticksToApply; i += 1) {
           const next = nextPriceState({ price, trendDirection, trendTicksLeft });
           price = next.price;
           trendDirection = next.trendDirection;
           trendTicksLeft = next.trendTicksLeft;
         }
 
+        // Advance by elapsed intervals rather than setting now; this avoids timer drift.
+        // If we capped catch-up, leave the remaining elapsed intervals due for the next poll.
         transaction.set(marketRef, {
           price,
-          lastPriceAt: lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL,
+          lastPriceAt: lastPriceAt + ticksToApply * PRICE_UPDATE_INTERVAL,
           trendDirection,
           trendTicksLeft,
           updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
@@ -259,10 +263,16 @@
       });
     } catch (error) {
       console.error("Не вдалося оновити спільний курс CRYP:", error);
+      const code = error && error.code ? error.code : "unknown";
       if (els.marketStatus) {
-        els.marketStatus.textContent = "Помилка курсу: " + (error && error.code ? error.code : "перевір Firestore Rules та інтернет");
+        const hints = {
+          "permission-denied": "Firebase блокує доступ до market/current (Firestore Rules)",
+          "unavailable": "Firebase недоступний — перевір інтернет",
+          "failed-precondition": "Firestore відхилив операцію — перевір налаштування бази"
+        };
+        els.marketStatus.textContent = "Помилка курсу (" + code + "): " + (hints[code] || "перевір Firestore Rules та інтернет");
       }
-      if (els.saveStatus) els.saveStatus.textContent = "Не вдалося оновити курс CRYP — дивись повідомлення на біржі";
+      if (els.saveStatus) els.saveStatus.textContent = "Курс CRYP не оновився — дивись повідомлення на біржі";
     } finally {
       marketUpdateInProgress = false;
     }
