@@ -202,5 +202,3 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .auth-account-bar { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
 .auth-account-bar button { padding:7px 10px; }
 
-
-
