@@ -784,4 +784,3 @@
   window.setInterval(tick, 1000);
   window.addEventListener("beforeunload", save);
 })();
-
