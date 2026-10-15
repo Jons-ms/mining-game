@@ -113,14 +113,14 @@
       cloudSaveTimer = setTimeout(() => {
         const uid = currentUserUID;
         const stateToSave = JSON.parse(JSON.stringify(state));
-        cloudSaveInProgress = cloudSaveInProgress
+save        cloudSaveInProgress = cloudSaveInProgress
           .catch(() => {})
           .then(() => {
             if (uid !== currentUserUID || !cloudSaveReady) return;
             return window.crypFirebase.db.collection("players").doc(uid).set({
               ...stateToSave,
               updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-            }, { merge: true }).then(() => {
+            }).then(() => {
               if (uid === currentUserUID) els.saveStatus.textContent = "Збережено в хмарі";
             });
           })
@@ -147,7 +147,7 @@
     state.cryp += totalRate() * seconds;
   }
 
-  // Per-player Firestore market: each account keeps its own rate, synced across that player's devices.
+  // Shared Firestore market: one transaction advances the exchange rate for every player.
   const PRICE_UPDATE_INTERVAL = 5000;
   const PRICE_BASELINE = 1;
   const MIN_TREND_TICKS = 1;
@@ -232,26 +232,21 @@
 
   async function startMarketSync(db, expectedUID) {
     stopMarketSync();
-    if (!db || !expectedUID) {
-      if (els.marketStatus) els.marketStatus.textContent = "Твій курс недоступний: Firestore не підключився.";
+    if (!db) {
+      if (els.marketStatus) els.marketStatus.textContent = "Спільний курс недоступний: Firestore не підключився.";
       return false;
     }
 
-    const ref = db.collection("players").doc(expectedUID);
-    const initialMarket = {
-      ...marketState,
-      price: clampPrice(marketState.price),
-      lastPriceAt: Number(marketState.lastPriceAt) || Date.now()
-    };
+    const ref = db.collection("market").doc("exchangeRate");
+    const initialMarket = { ...INITIAL_MARKET_STATE, lastPriceAt: Date.now() };
     try {
       await db.runTransaction(async (transaction) => {
         const snapshot = await transaction.get(ref);
-        const player = snapshot.exists ? snapshot.data() : {};
-        if (!player.market) {
+        if (!snapshot.exists) {
           transaction.set(ref, {
-            market: initialMarket,
+            ...initialMarket,
             updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-          }, { merge: true });
+          });
         }
       });
 
@@ -260,21 +255,19 @@
       marketRef = ref;
       marketUnsubscribe = ref.onSnapshot((snapshot) => {
         if (!snapshot.exists) return;
-        const player = snapshot.data();
-        if (!player || !player.market) return;
-        marketState = normalizedMarketState(player.market);
+        marketState = normalizedMarketState(snapshot.data());
         marketReady = true;
-        if (els.marketStatus) els.marketStatus.textContent = "Твій курс синхронізується через Firestore.";
+        if (els.marketStatus) els.marketStatus.textContent = "Спільний курс синхронізується через Firestore.";
         renderStats();
       }, (error) => {
         marketReady = false;
-        console.error("Не вдалося синхронізувати курс гравця:", error);
-        if (els.marketStatus) els.marketStatus.textContent = "Твій курс недоступний — перевір правила Firestore.";
+        console.error("Не вдалося синхронізувати спільний курс:", error);
+        if (els.marketStatus) els.marketStatus.textContent = "Спільний курс недоступний — перевір правила Firestore.";
       });
       return true;
     } catch (error) {
-      console.error("Не вдалося підключити курс гравця:", error);
-      if (els.marketStatus) els.marketStatus.textContent = "Твій курс недоступний — перевір правила Firestore.";
+      console.error("Не вдалося підключити спільний курс:", error);
+      if (els.marketStatus) els.marketStatus.textContent = "Спільний курс недоступний — перевір правила Firestore.";
       return false;
     }
   }
@@ -288,8 +281,16 @@
     marketUpdateInProgress = true;
     window.crypFirebase.db.runTransaction(async (transaction) => {
       const snapshot = await transaction.get(ref);
-      const player = snapshot.exists ? snapshot.data() : {};
-      const previous = normalizedMarketState(player.market || marketState);
+      if (!snapshot.exists) {
+        transaction.set(ref, {
+          ...INITIAL_MARKET_STATE,
+          lastPriceAt: now,
+          updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+        });
+        return;
+      }
+
+      const previous = normalizedMarketState(snapshot.data());
       if (now - previous.lastPriceAt < PRICE_UPDATE_INTERVAL) return;
 
       const dueTicks = Math.min(120, Math.floor((now - previous.lastPriceAt) / PRICE_UPDATE_INTERVAL));
@@ -301,16 +302,14 @@
       for (let i = 0; i < dueTicks; i++) next = { ...next, ...nextPriceState(next) };
 
       transaction.set(ref, {
-        market: {
-          ...next,
-          lastPriceAt: previous.lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL
-        },
+        ...next,
+        lastPriceAt: previous.lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL,
         updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-      }, { merge: true });
+      });
     }).catch((error) => {
-      console.error("Не вдалося оновити курс гравця:", error);
+      console.error("Не вдалося оновити спільний курс:", error);
       if (uid === currentUserUID && els.marketStatus) {
-        els.marketStatus.textContent = "Не вдалося оновити твій курс — перевір правила Firestore.";
+        els.marketStatus.textContent = "Не вдалося оновити спільний курс — перевір правила Firestore.";
       }
     }).finally(() => {
       marketUpdateInProgress = false;
@@ -532,7 +531,7 @@
 
   function sellCRYP() {
     if (!marketReady) {
-      showToast("Твій курс ще не завантажився. Спробуй трохи пізніше.");
+      showToast("Спільний курс ще не завантажився. Спробуй трохи пізніше.");
       return;
     }
     const amount = Number(els.sellAmount.value);
@@ -807,14 +806,10 @@
               if (remote && Array.isArray(remote.slots)) {
                 const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
                 state = { ...newState(), ...remote };
-                marketState = remote.market && typeof remote.market === "object"
-                  ? normalizedMarketState(remote.market)
-                  : { ...INITIAL_MARKET_STATE, lastPriceAt: Date.now() };
                 delete state.price;
                 delete state.lastPriceAt;
                 delete state.trendDirection;
                 delete state.trendTicksLeft;
-                delete state.market;
                 state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null)
                   .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
                 state.inventory = Array.isArray(remote.inventory) ? remote.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
