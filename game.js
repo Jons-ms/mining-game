@@ -561,6 +561,7 @@
   const googleSignIn = $("googleSignIn");
   const signOutButton = $("signOutButton");
   let authMode = "login";
+  let authStateVersion = 0;
 
   function setAuthMode(mode) {
     authMode = mode;
@@ -677,6 +678,7 @@
     }
 
     auth.onAuthStateChanged(async (user) => {
+      const callbackVersion = ++authStateVersion;
 
       cloudSaveReady = false;
       clearTimeout(cloudSaveTimer);
@@ -701,6 +703,8 @@
           const playerRef = db.collection("players").doc(user.uid);
           try {
             const snapshot = await playerRef.get();
+            if (callbackVersion !== authStateVersion || currentUserUID !== user.uid) return;
+
             if (snapshot.exists) {
               const remote = snapshot.data();
               if (remote && Array.isArray(remote.slots)) {
@@ -732,13 +736,17 @@
                 ...firstCloudSave,
                 updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
               });
+              if (callbackVersion !== authStateVersion || currentUserUID !== user.uid) return;
             }
             cloudSaveReady = true;
           } catch (cloudError) {
+            if (callbackVersion !== authStateVersion || currentUserUID !== user.uid) return;
             console.error("Не вдалося завантажити/створити хмарне збереження:", cloudError);
             els.saveStatus.textContent = "Не вдалося підключити хмарне збереження — перевір правила Firestore";
           }
         }
+
+        if (callbackVersion !== authStateVersion || currentUserUID !== user.uid) return;
 
         // Exchange rate is local-only and must not be initialized from Firestore.
         if (els.marketStatus) els.marketStatus.textContent = "Курс зберігається на цьому пристрої.";
@@ -760,6 +768,7 @@
           save();
         }
       } catch (error) {
+        if (callbackVersion !== authStateVersion || currentUserUID !== user.uid) return;
         console.error("Не вдалося відкрити гру після входу:", error);
 
         authScreen.hidden = false;

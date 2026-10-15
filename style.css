@@ -119,43 +119,6 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 }
 
 
-/* Інвентар відкривається поверх гри лише після натискання на слот ферми. */
-.inventory-modal {
-  position: fixed;
-  inset: 0;
-  z-index: 20;
-  display: grid;
-  place-items: center;
-  padding: 18px;
-  background: rgba(4, 7, 13, .78);
-  backdrop-filter: blur(5px);
-}
-.inventory-modal[hidden] { display: none; }
-.inventory-dialog {
-  width: min(520px, 100%);
-  max-height: min(80vh, 680px);
-  overflow-y: auto;
-  box-shadow: 0 24px 80px #0009;
-}
-.modal-close {
-  flex: 0 0 auto;
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  color: var(--text);
-  background: var(--panel-soft);
-  font-size: 25px;
-  line-height: 1;
-}
-.farm-panel { min-height: 350px; }
-.farm-grid { min-height: 250px; }
-@media (max-width: 430px) {
-  .farm-panel { min-height: 300px; }
-  .farm-grid { min-height: 220px; }
-}
-
-
 /* Меню дій для встановленої відеокарти */
 .gpu-action-modal {
   position: fixed;
