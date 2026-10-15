@@ -113,7 +113,7 @@
       cloudSaveTimer = setTimeout(() => {
         const uid = currentUserUID;
         const stateToSave = JSON.parse(JSON.stringify(state));
-save        cloudSaveInProgress = cloudSaveInProgress
+        cloudSaveInProgress = cloudSaveInProgress
           .catch(() => {})
           .then(() => {
             if (uid !== currentUserUID || !cloudSaveReady) return;
