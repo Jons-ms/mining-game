@@ -148,10 +148,11 @@
   }
 
   // Shared Firestore market: one transaction advances the exchange rate for every player.
+  // Оновлюємо курс раз на 5 секунд, але змінюємо його невеликими кроками.
   const PRICE_UPDATE_INTERVAL = 5000;
   const PRICE_BASELINE = 1;
-  const MIN_TREND_TICKS = 1;
-  const MAX_TREND_TICKS = 3;
+  const MIN_TREND_TICKS = 3;
+  const MAX_TREND_TICKS = 12;
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -194,11 +195,12 @@
       }
     }
 
-    // Рух угору сильніший на низькому курсі; на високому курсі зростання стриманіше.
-    const riseMin = currentPrice < 1.25 ? 1.16 : currentPrice < 3 ? 1.12 : 1.08;
-    const riseMax = currentPrice < 1.25 ? 1.32 : currentPrice < 3 ? 1.25 : 1.20;
-    const fallMin = currentPrice < 1.25 ? 0.91 : 0.84;
-    const fallMax = currentPrice < 1.25 ? 0.98 : 0.93;
+    // Невеликі кроки прибирають різкі стрибки: за один цикл курс змінюється приблизно на 1–4%.
+    // На низькому курсі відновлення ймовірніше, але воно також відбувається поступово.
+    const riseMin = currentPrice < 1.25 ? 1.02 : currentPrice < 3 ? 1.015 : 1.01;
+    const riseMax = currentPrice < 1.25 ? 1.04 : currentPrice < 3 ? 1.03 : 1.025;
+    const fallMin = currentPrice < 1.25 ? 0.98 : currentPrice < 4 ? 0.975 : 0.97;
+    const fallMax = currentPrice < 1.25 ? 0.99 : currentPrice < 4 ? 0.985 : 0.99;
     const factor = direction === 1
       ? riseMin + Math.random() * (riseMax - riseMin)
       : fallMin + Math.random() * (fallMax - fallMin);
