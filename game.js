@@ -151,8 +151,8 @@
   // Оновлюємо курс раз на 5 секунд, але змінюємо його невеликими кроками.
   const PRICE_UPDATE_INTERVAL = 5000;
   const PRICE_BASELINE = 1;
-  const MIN_TREND_TICKS = 3;
-  const MAX_TREND_TICKS = 12;
+  const MIN_TREND_TICKS = 1;
+  const MAX_TREND_TICKS = 4;
 
   function clampPrice(value) {
     const parsed = Number(value);
@@ -165,6 +165,17 @@
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
 
+    // Курс не рухається за довгим передбачуваним трендом: на кожному кроці
+    // є шанс різко змінити напрямок, а нові тренди короткі.
+    const upwardChance = currentPrice < 0.75 ? 0.78
+      : currentPrice < 1.25 ? 0.70
+      : currentPrice < 2 ? 0.62
+      : currentPrice < 3 ? 0.54
+      : currentPrice < 4 ? 0.48
+      : currentPrice < 5.5 ? 0.43
+      : currentPrice < 6.25 ? 0.36
+      : 0.28;
+
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
       ticksLeft = 1;
@@ -172,40 +183,24 @@
       direction = 1;
       ticksLeft = 1;
     } else {
-      // Короткі тренди та адаптивні шанси не дають курсу надовго застрягати внизу.
-      // Чим нижчий курс, тим сильніший шанс відновлення до 5–6 ₴.
-      const upwardChance = currentPrice < 0.75 ? 0.96
-        : currentPrice < 1.25 ? 0.93
-        : currentPrice < 2 ? 0.86
-        : currentPrice < 3 ? 0.76
-        : currentPrice < 4 ? 0.65
-        : currentPrice < 5.5 ? 0.52
-        : currentPrice < 6.25 ? 0.38
-        : 0.24;
-
-      // Якщо курс низький, не дозволяємо старому низхідному тренду затягувати падіння.
-      if (currentPrice < 1.25 && direction !== 1) {
-        direction = 1;
-        ticksLeft = 0;
-      }
-
-      if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+      if (direction !== -1 && direction !== 1) {
         direction = Math.random() < upwardChance ? 1 : -1;
-        ticksLeft = MIN_TREND_TICKS + Math.floor(Math.random() * (MAX_TREND_TICKS - MIN_TREND_TICKS + 1));
+        ticksLeft = 1 + Math.floor(Math.random() * 4);
+      } else if (Math.random() < 0.35) {
+        // 35% шансів змінити напрямок достроково — це додає несподіванок.
+        direction *= -1;
+        ticksLeft = 1 + Math.floor(Math.random() * 4);
+      } else if (!Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+        direction = Math.random() < upwardChance ? 1 : -1;
+        ticksLeft = 1 + Math.floor(Math.random() * 4);
       }
     }
 
-    // Невеликі кроки прибирають різкі стрибки: за один цикл курс змінюється приблизно на 1–4%.
-    // На низькому курсі відновлення ймовірніше, але воно також відбувається поступово.
-    const riseMin = currentPrice < 1.25 ? 1.02 : currentPrice < 3 ? 1.015 : 1.01;
-    const riseMax = currentPrice < 1.25 ? 1.04 : currentPrice < 3 ? 1.03 : 1.025;
-    const fallMin = currentPrice < 1.25 ? 0.98 : currentPrice < 4 ? 0.975 : 0.97;
-    const fallMax = currentPrice < 1.25 ? 0.99 : currentPrice < 4 ? 0.985 : 0.99;
-    const factor = direction === 1
-      ? riseMin + Math.random() * (riseMax - riseMin)
-      : fallMin + Math.random() * (fallMax - fallMin);
-
+    // Кожні 5 секунд курс змінюється на випадкові 10–15%.
+    const change = 0.10 + Math.random() * 0.05;
+    const factor = direction === 1 ? 1 + change : 1 - change;
     const price = clampPrice(currentPrice * factor);
+
     ticksLeft -= 1;
     if (price >= MAX_PRICE || price <= MIN_PRICE) ticksLeft = 0;
     return { price: Number(price.toFixed(4)), trendDirection: direction, trendTicksLeft: ticksLeft };
