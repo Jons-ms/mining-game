@@ -165,16 +165,17 @@
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
 
-    // Below 5.5 UAH the market is deliberately biased upward, so players
-    // do not have to wait many minutes for a useful selling price.
-    const upwardChance = currentPrice < 1 ? 0.84
-      : currentPrice < 2 ? 0.82
-      : currentPrice < 3 ? 0.79
-      : currentPrice < 4.5 ? 0.75
-      : currentPrice < 5.5 ? 0.66
-      : currentPrice < 6.25 ? 0.48
+    // Give the market visible multi-step waves rather than tiny random reversals.
+    // Lower prices favor recovery; near the ceiling, a decline becomes more likely.
+    const upwardChance = currentPrice < 0.75 ? 0.78
+      : currentPrice < 1.5 ? 0.72
+      : currentPrice < 2.5 ? 0.66
+      : currentPrice < 4 ? 0.60
+      : currentPrice < 5.25 ? 0.53
+      : currentPrice < 6.25 ? 0.43
       : 0.30;
 
+    // Force the market to turn away from its limits instead of sticking there.
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
       ticksLeft = 1;
@@ -183,14 +184,15 @@
       ticksLeft = 1;
     }
 
-    // Short trends (10–25 seconds) keep movement visible without long stalls.
+    // A trend lasts 4–10 updates (20–50 seconds). When it ends, pick a fresh
+    // direction; this creates climbs, pullbacks, recoveries and eventual downturns.
     if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
       direction = Math.random() < upwardChance ? 1 : -1;
-      ticksLeft = 2 + Math.floor(Math.random() * 4); // 2–5 ticks
+      ticksLeft = 4 + Math.floor(Math.random() * 7); // 4–10 ticks
     }
 
-    // A 4–6% move every 5 seconds makes the market responsive but not instant.
-    const change = 0.04 + Math.random() * 0.02;
+    // Smooth but noticeable movement every 5 seconds.
+    const change = 0.025 + Math.random() * 0.02; // 2.5–4.5%
     const factor = direction === 1 ? 1 + change : 1 - change;
     const price = clampPrice(currentPrice * factor);
 
