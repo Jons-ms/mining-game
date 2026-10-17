@@ -165,16 +165,15 @@
     let direction = Number(previous.trendDirection);
     let ticksLeft = Number(previous.trendTicksLeft);
 
-    // Курс не рухається за довгим передбачуваним трендом: на кожному кроці
-    // є шанс різко змінити напрямок, а нові тренди короткі.
-    const upwardChance = currentPrice < 0.75 ? 0.78
-      : currentPrice < 1.25 ? 0.70
-      : currentPrice < 2 ? 0.62
-      : currentPrice < 3 ? 0.54
-      : currentPrice < 4 ? 0.48
-      : currentPrice < 5.5 ? 0.43
-      : currentPrice < 6.25 ? 0.36
-      : 0.28;
+    // Below 5.5 UAH the market is deliberately biased upward, so players
+    // do not have to wait many minutes for a useful selling price.
+    const upwardChance = currentPrice < 1 ? 0.84
+      : currentPrice < 2 ? 0.82
+      : currentPrice < 3 ? 0.79
+      : currentPrice < 4.5 ? 0.75
+      : currentPrice < 5.5 ? 0.66
+      : currentPrice < 6.25 ? 0.48
+      : 0.30;
 
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
@@ -184,15 +183,14 @@
       ticksLeft = 1;
     }
 
-    // Keep trends long enough to create visible movement, but force a fresh
-    // direction choice when a trend ends instead of randomly reversing every few ticks.
+    // Short trends (10–25 seconds) keep movement visible without long stalls.
     if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
       direction = Math.random() < upwardChance ? 1 : -1;
-      ticksLeft = 3 + Math.floor(Math.random() * 6); // 3–8 ticks = 15–40 seconds
+      ticksLeft = 2 + Math.floor(Math.random() * 4); // 2–5 ticks
     }
 
-    // Each 5-second step moves 3–5%: noticeable movement without multi-krone jumps.
-    const change = 0.03 + Math.random() * 0.02;
+    // A 4–6% move every 5 seconds makes the market responsive but not instant.
+    const change = 0.04 + Math.random() * 0.02;
     const factor = direction === 1 ? 1 + change : 1 - change;
     const price = clampPrice(currentPrice * factor);
 
