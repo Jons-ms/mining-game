@@ -178,10 +178,10 @@
 
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
-      ticksLeft = 0;
+      ticksLeft = 1;
     } else if (currentPrice <= MIN_PRICE) {
       direction = 1;
-      ticksLeft = 0;
+      ticksLeft = 1;
     }
 
     // Keep trends long enough to create visible movement, but force a fresh
