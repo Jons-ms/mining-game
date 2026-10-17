@@ -196,8 +196,7 @@
       }
     }
 
-    // Кожні 5 секунд курс змінюється на випадкові 10–15%.
-    // Keep individual moves modest so the market does not jump several hryvnias at once.
+    // Кожні 5 секунд курс змінюється на випадкові 2–4%, без великих стрибків.
     const change = 0.02 + Math.random() * 0.02;
     const factor = direction === 1 ? 1 + change : 1 - change;
     const price = clampPrice(currentPrice * factor);
