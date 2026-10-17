@@ -51,6 +51,10 @@
   let marketReady = false;
   let marketUpdateInProgress = false;
   let podiumUnsubscribe = null;
+  let podiumPublishTimer = null;
+  let podiumProfiles = [];
+  let lastPodiumPublishAt = 0;
+  let lastPodiumPublishSignature = "";
 
   function loadState() {
     try {
@@ -123,7 +127,10 @@
               ...stateToSave,
               updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
             }).then(() => {
-              if (uid === currentUserUID) els.saveStatus.textContent = "Збережено в хмарі";
+              if (uid === currentUserUID) {
+                els.saveStatus.textContent = "Збережено в хмарі";
+                queuePodiumPublish(window.crypFirebase.db, uid);
+              }
             });
           })
           .catch((error) => {
@@ -322,6 +329,7 @@
     if (els.exchangePrice) els.exchangePrice.textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangeBalance) els.exchangeBalance.textContent = number(state.cryp) + " CRYP";
     updateSellPreview();
+    renderPodium();
   }
 
   function renderPodiumMessage(message) {
@@ -338,6 +346,40 @@
   function stopPodiumSync() {
     if (podiumUnsubscribe) podiumUnsubscribe();
     podiumUnsubscribe = null;
+    if (podiumPublishTimer) clearTimeout(podiumPublishTimer);
+    podiumPublishTimer = null;
+    podiumProfiles = [];
+  }
+
+  function queuePodiumPublish(db, expectedUID) {
+    if (!db || !expectedUID || expectedUID !== currentUserUID || !cloudSaveReady) return;
+    if (podiumPublishTimer) return;
+
+    const delay = Math.max(0, 60000 - (Date.now() - lastPodiumPublishAt));
+    podiumPublishTimer = setTimeout(async () => {
+      podiumPublishTimer = null;
+      if (expectedUID !== currentUserUID || !cloudSaveReady) return;
+
+      const profile = {
+        nickname: String(state.playerName || "Гравець").trim().slice(0, 20) || "Гравець",
+        cashBalance: Math.max(0, Number(state.cash) || 0),
+        crypBalance: Math.max(0, Number(state.cryp) || 0)
+      };
+      const signature = JSON.stringify(profile);
+      if (signature === lastPodiumPublishSignature) return;
+
+      try {
+        await db.collection("podiumPlayers").doc(expectedUID).set({
+          ...profile,
+          updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+        });
+        lastPodiumPublishSignature = signature;
+        lastPodiumPublishAt = Date.now();
+      } catch (error) {
+        console.error("Не вдалося оновити публічний рядок Подіуму:", error);
+        if (els.podiumStatus) els.podiumStatus.textContent = "Не вдалося оновити рейтинг — перевір правила Firestore.";
+      }
+    }, delay);
   }
 
   function formatPodiumUpdatedAt(timestamp) {
@@ -352,12 +394,19 @@
     }).format(date);
   }
 
-  function renderPodium(data) {
-    const entries = Array.isArray(data.players) ? data.players.slice(0, 10) : [];
+  function renderPodium() {
+    if (!els.podiumRows) return;
+    const entries = podiumProfiles.map((profile) => ({
+      nickname: profile.nickname || "Гравець",
+      cashBalance: Math.max(0, Number(profile.cashBalance) || 0),
+      totalCapital: Math.max(0, Number(profile.cashBalance) || 0)
+        + Math.max(0, Number(profile.crypBalance) || 0) * (marketReady ? marketState.price : 1),
+      updatedAt: profile.updatedAt
+    })).sort((a, b) => b.totalCapital - a.totalCapital || a.nickname.localeCompare(b.nickname, "uk")).slice(0, 10);
     els.podiumRows.replaceChildren();
 
     if (!entries.length) {
-      renderPodiumMessage("Поки що немає гравців у рейтингу.");
+      renderPodiumMessage("Рейтинг з’явиться, коли гравці зайдуть у гру.");
     } else {
       entries.forEach((entry, index) => {
         const row = document.createElement("tr");
@@ -374,28 +423,24 @@
       });
     }
 
-    els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(data.updatedAt);
-    els.podiumUpdatedAt.dateTime = data.updatedAt && typeof data.updatedAt.toDate === "function"
-      ? data.updatedAt.toDate().toISOString()
-      : "";
-    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць. Рейтинг оновлюється щогодини.";
+    const latest = entries.map((entry) => entry.updatedAt)
+      .filter(Boolean)
+      .sort((a, b) => b.toMillis() - a.toMillis())[0] || null;
+    els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(latest);
+    els.podiumUpdatedAt.dateTime = latest && typeof latest.toDate === "function" ? latest.toDate().toISOString() : "";
+    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць. Дані оновлюються, коли гравці заходять у гру.";
   }
 
   function startPodiumSync(db, expectedUID) {
     stopPodiumSync();
     if (!db || expectedUID !== currentUserUID) return;
     els.podiumStatus.textContent = "Завантажуємо рейтинг…";
-    renderPodiumMessage("Рейтинг ще формується.");
+    renderPodiumMessage("Рейтинг з’явиться, коли гравці зайдуть у гру.");
 
-    podiumUnsubscribe = db.collection("podium").doc("current").onSnapshot((snapshot) => {
+    podiumUnsubscribe = db.collection("podiumPlayers").onSnapshot((snapshot) => {
       if (expectedUID !== currentUserUID) return;
-      if (!snapshot.exists) {
-        renderPodiumMessage("Рейтинг ще формується. Перевір налаштування GitHub Actions.");
-        els.podiumUpdatedAt.textContent = "—";
-        els.podiumStatus.textContent = "Рейтинг ще не створено.";
-        return;
-      }
-      renderPodium(snapshot.data() || {});
+      podiumProfiles = snapshot.docs.map((doc) => doc.data() || {});
+      renderPodium();
     }, (error) => {
       if (expectedUID !== currentUserUID) return;
       console.error("Не вдалося завантажити рейтинг:", error);
