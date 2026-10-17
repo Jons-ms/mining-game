@@ -12,7 +12,7 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
-    // Clients may see only the scheduler's deliberately limited public snapshot.
+    // Clients may see only the workflow's deliberately limited public snapshot.
     match /podium/current {
       allow read: if request.auth != null;
       allow write: if false;
