@@ -378,7 +378,7 @@
     els.podiumUpdatedAt.dateTime = data.updatedAt && typeof data.updatedAt.toDate === "function"
       ? data.updatedAt.toDate().toISOString()
       : "";
-    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць. Рейтинг оновлюється сервером раз на годину.";
+    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць. Рейтинг оновлюється щогодини.";
   }
 
   function startPodiumSync(db, expectedUID) {
@@ -390,7 +390,7 @@
     podiumUnsubscribe = db.collection("podium").doc("current").onSnapshot((snapshot) => {
       if (expectedUID !== currentUserUID) return;
       if (!snapshot.exists) {
-        renderPodiumMessage("Рейтинг ще формується. Перевір налаштування Firebase Functions.");
+        renderPodiumMessage("Рейтинг ще формується. Перевір налаштування GitHub Actions.");
         els.podiumUpdatedAt.textContent = "—";
         els.podiumStatus.textContent = "Рейтинг ще не створено.";
         return;
