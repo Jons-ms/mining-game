@@ -178,26 +178,21 @@
 
     if (currentPrice >= MAX_PRICE) {
       direction = -1;
-      ticksLeft = 1;
+      ticksLeft = 0;
     } else if (currentPrice <= MIN_PRICE) {
       direction = 1;
-      ticksLeft = 1;
-    } else {
-      if (direction !== -1 && direction !== 1) {
-        direction = Math.random() < upwardChance ? 1 : -1;
-        ticksLeft = 1 + Math.floor(Math.random() * 4);
-      } else if (Math.random() < 0.35) {
-        // 35% шансів змінити напрямок достроково — це додає несподіванок.
-        direction *= -1;
-        ticksLeft = 1 + Math.floor(Math.random() * 4);
-      } else if (!Number.isFinite(ticksLeft) || ticksLeft <= 0) {
-        direction = Math.random() < upwardChance ? 1 : -1;
-        ticksLeft = 1 + Math.floor(Math.random() * 4);
-      }
+      ticksLeft = 0;
     }
 
-    // Кожні 5 секунд курс змінюється на випадкові 2–4%, без великих стрибків.
-    const change = 0.02 + Math.random() * 0.02;
+    // Keep trends long enough to create visible movement, but force a fresh
+    // direction choice when a trend ends instead of randomly reversing every few ticks.
+    if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+      direction = Math.random() < upwardChance ? 1 : -1;
+      ticksLeft = 3 + Math.floor(Math.random() * 6); // 3–8 ticks = 15–40 seconds
+    }
+
+    // Each 5-second step moves 3–5%: noticeable movement without multi-krone jumps.
+    const change = 0.03 + Math.random() * 0.02;
     const factor = direction === 1 ? 1 + change : 1 - change;
     const price = clampPrice(currentPrice * factor);
 
