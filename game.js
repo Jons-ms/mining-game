@@ -25,7 +25,8 @@
     gpuActionModal: $("gpuActionModal"), gpuActionDetails: $("gpuActionDetails"),
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
     sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
-    exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus")
+    exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus"),
+    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt")
   };
 
   function newState() {
@@ -49,6 +50,7 @@
   let marketUnsubscribe = null;
   let marketReady = false;
   let marketUpdateInProgress = false;
+  let podiumUnsubscribe = null;
 
   function loadState() {
     try {
@@ -320,6 +322,87 @@
     if (els.exchangePrice) els.exchangePrice.textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangeBalance) els.exchangeBalance.textContent = number(state.cryp) + " CRYP";
     updateSellPreview();
+  }
+
+  function renderPodiumMessage(message) {
+    if (!els.podiumRows) return;
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 4;
+    cell.className = "empty-podium";
+    cell.textContent = message;
+    row.appendChild(cell);
+    els.podiumRows.replaceChildren(row);
+  }
+
+  function stopPodiumSync() {
+    if (podiumUnsubscribe) podiumUnsubscribe();
+    podiumUnsubscribe = null;
+  }
+
+  function formatPodiumUpdatedAt(timestamp) {
+    if (!timestamp) return "—";
+    const date = typeof timestamp.toDate === "function"
+      ? timestamp.toDate()
+      : (timestamp instanceof Date ? timestamp : new Date(timestamp));
+    if (Number.isNaN(date.getTime())) return "—";
+    return new Intl.DateTimeFormat("uk-UA", {
+      dateStyle: "medium",
+      timeStyle: "short"
+    }).format(date);
+  }
+
+  function renderPodium(data) {
+    const entries = Array.isArray(data.players) ? data.players.slice(0, 10) : [];
+    els.podiumRows.replaceChildren();
+
+    if (!entries.length) {
+      renderPodiumMessage("Поки що немає гравців у рейтингу.");
+    } else {
+      entries.forEach((entry, index) => {
+        const row = document.createElement("tr");
+        const rank = document.createElement("td");
+        const nickname = document.createElement("td");
+        const cash = document.createElement("td");
+        const total = document.createElement("td");
+        rank.textContent = String(Number(entry.rank) || index + 1);
+        nickname.textContent = String(entry.nickname || "Гравець").slice(0, 20);
+        cash.textContent = money(entry.cashBalance);
+        total.textContent = money(entry.totalCapital);
+        row.append(rank, nickname, cash, total);
+        els.podiumRows.appendChild(row);
+      });
+    }
+
+    els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(data.updatedAt);
+    els.podiumUpdatedAt.dateTime = data.updatedAt && typeof data.updatedAt.toDate === "function"
+      ? data.updatedAt.toDate().toISOString()
+      : "";
+    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць. Рейтинг оновлюється сервером раз на годину.";
+  }
+
+  function startPodiumSync(db, expectedUID) {
+    stopPodiumSync();
+    if (!db || expectedUID !== currentUserUID) return;
+    els.podiumStatus.textContent = "Завантажуємо рейтинг…";
+    renderPodiumMessage("Рейтинг ще формується.");
+
+    podiumUnsubscribe = db.collection("podium").doc("current").onSnapshot((snapshot) => {
+      if (expectedUID !== currentUserUID) return;
+      if (!snapshot.exists) {
+        renderPodiumMessage("Рейтинг ще формується. Перевір налаштування Firebase Functions.");
+        els.podiumUpdatedAt.textContent = "—";
+        els.podiumStatus.textContent = "Рейтинг ще не створено.";
+        return;
+      }
+      renderPodium(snapshot.data() || {});
+    }, (error) => {
+      if (expectedUID !== currentUserUID) return;
+      console.error("Не вдалося завантажити рейтинг:", error);
+      renderPodiumMessage("Не вдалося завантажити рейтинг.");
+      els.podiumStatus.textContent = "Перевір правила Firestore для рейтингу.";
+      els.podiumUpdatedAt.textContent = "—";
+    });
   }
 
   function renderFarm() {
@@ -768,6 +851,7 @@
     auth.onAuthStateChanged(async (user) => {
 
       stopMarketSync();
+      stopPodiumSync();
       cloudSaveReady = false;
       clearTimeout(cloudSaveTimer);
 
@@ -823,6 +907,7 @@
         }
 
         await startMarketSync(db, user.uid);
+        startPodiumSync(db, user.uid);
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
           state.playerName = user.displayName.slice(0, 20);
