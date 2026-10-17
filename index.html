@@ -41,7 +41,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
-  <script src="game.js?v=20261017-1" defer></script>
+  <script src="game.js?v=20261018-1" defer></script>
 </head>
 <body>
 
@@ -129,9 +129,8 @@
     <section class="page-section" id="page-podium" hidden>
       <section class="panel">
         <div class="section-heading"><h2>Подіум</h2></div>
-        <p class="hint">Топ-10 гравців за загальним капіталом. Рейтинг оновлюється, коли гравці заходять у гру.</p>
         <p class="small-note" id="podiumStatus" role="status" aria-live="polite">Завантажуємо рейтинг…</p>
-        <p class="small-note">Останнє оновлення: <time id="podiumUpdatedAt">—</time></p>
+        <p class="small-note">Курс CRYP: <span id="podiumRate">—</span> · Останнє оновлення: <time id="podiumUpdatedAt">—</time></p>
         <div class="podium-table-wrap" role="region" aria-label="Рейтинг гравців" tabindex="0">
           <table class="podium-table">
             <thead>
