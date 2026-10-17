@@ -22,7 +22,7 @@ GitHub Actions щогодини читає потрібні поля гравц�
 
 1. Перевір, що у проєкті `cryp-togame` увімкнений Cloud Firestore API і створений окремий service account лише для рейтингу.
 2. Дай цьому service account доступ до Firestore через власну IAM-роль із дозволами `datastore.databases.get`, `datastore.entities.get`, `datastore.entities.list`, `datastore.entities.create` та `datastore.entities.update`. Вони потрібні для читання гравців/курсу і запису рейтингу. Така роль все одно може читати всі документи бази; не давай обліковому запису ширші ролі Owner/Editor/Admin.
-3. Створи Workload Identity Pool і OIDC Provider для issuer `https://token.actions.githubusercontent.com`. Зістав claims `google.subject=assertion.sub`, `attribute.repository=assertion.repository`, `attribute.ref=assertion.ref`; обмеж умову provider репозиторієм `Jons-ms/mining-game` і гілкою `refs/heads/main`.
+3. Створи Workload Identity Pool і OIDC Provider для issuer `https://token.actions.githubusercontent.com`. Зістав claims `google.subject=assertion.sub`, `attribute.repository=assertion.repository`, `attribute.ref=assertion.ref`, `attribute.workflow_ref=assertion.workflow_ref`; обмеж умову provider репозиторієм `Jons-ms/mining-game`, гілкою `refs/heads/main` і workflow `Jons-ms/mining-game/.github/workflows/update-podium.yml@refs/heads/main`.
 4. Дозволь цьому provider impersonate service account через роль `roles/iam.workloadIdentityUser`, обмеживши прив’язку репозиторієм `Jons-ms/mining-game`.
 5. У GitHub відкрий **Settings → Secrets and variables → Actions → Variables** і додай:
    - `GCP_WORKLOAD_IDENTITY_PROVIDER` — повний resource name provider-а, наприклад `projects/123456789/locations/global/workloadIdentityPools/github/providers/mining-game`;
