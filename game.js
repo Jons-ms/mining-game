@@ -197,7 +197,8 @@
     }
 
     // Кожні 5 секунд курс змінюється на випадкові 10–15%.
-    const change = 0.10 + Math.random() * 0.05;
+    // Keep individual moves modest so the market does not jump several hryvnias at once.
+    const change = 0.02 + Math.random() * 0.02;
     const factor = direction === 1 ? 1 + change : 1 - change;
     const price = clampPrice(currentPrice * factor);
 
@@ -290,17 +291,15 @@
       const previous = normalizedMarketState(snapshot.data());
       if (now - previous.lastPriceAt < PRICE_UPDATE_INTERVAL) return;
 
-      const dueTicks = Math.min(120, Math.floor((now - previous.lastPriceAt) / PRICE_UPDATE_INTERVAL));
-      let next = {
-        price: previous.price,
-        trendDirection: previous.trendDirection,
-        trendTicksLeft: previous.trendTicksLeft
-      };
-      for (let i = 0; i < dueTicks; i++) next = { ...next, ...nextPriceState(next) };
+      // Apply exactly one price movement per update. Never replay missed ticks at once:
+      // that caused large instant jumps after a tab/device was inactive.
+      const next = { ...previous, ...nextPriceState(previous) };
 
       transaction.set(ref, {
-        ...next,
-        lastPriceAt: previous.lastPriceAt + dueTicks * PRICE_UPDATE_INTERVAL,
+        price: next.price,
+        trendDirection: next.trendDirection,
+        trendTicksLeft: next.trendTicksLeft,
+        lastPriceAt: now,
         updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
       });
     }).catch((error) => {
