@@ -26,7 +26,7 @@
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
     sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
     exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus"),
-    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt")
+    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt"), podiumRate: $("podiumRate")
   };
 
   function newState() {
@@ -328,6 +328,7 @@
     $("infoPrice").textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangePrice) els.exchangePrice.textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangeBalance) els.exchangeBalance.textContent = number(state.cryp) + " CRYP";
+    if (els.podiumRate) els.podiumRate.textContent = marketReady ? money(marketState.price) : "—";
     updateSellPreview();
     renderPodium();
   }
@@ -396,13 +397,22 @@
 
   function renderPodium() {
     if (!els.podiumRows) return;
-    const entries = podiumProfiles.map((profile) => ({
-      nickname: profile.nickname || "Гравець",
-      cashBalance: Math.max(0, Number(profile.cashBalance) || 0),
-      totalCapital: Math.max(0, Number(profile.cashBalance) || 0)
-        + Math.max(0, Number(profile.crypBalance) || 0) * (marketReady ? marketState.price : 1),
-      updatedAt: profile.updatedAt
-    })).sort((a, b) => b.totalCapital - a.totalCapital || a.nickname.localeCompare(b.nickname, "uk")).slice(0, 10);
+    if (!marketReady) {
+      renderPodiumMessage("Завантажуємо поточний курс CRYP…");
+      if (els.podiumStatus) els.podiumStatus.textContent = "Завантажуємо поточний курс CRYP…";
+      return;
+    }
+    const currentRate = marketState.price;
+    const entries = podiumProfiles.map((profile) => {
+      const cashBalance = Math.max(0, Number(profile.cashBalance) || 0);
+      const crypBalance = Math.max(0, Number(profile.crypBalance) || 0);
+      return {
+        nickname: profile.nickname || "Гравець",
+        cashBalance,
+        totalCapital: cashBalance + crypBalance * currentRate,
+        updatedAt: profile.updatedAt
+      };
+    }).sort((a, b) => b.totalCapital - a.totalCapital || a.nickname.localeCompare(b.nickname, "uk")).slice(0, 10);
     els.podiumRows.replaceChildren();
 
     if (!entries.length) {
@@ -428,7 +438,7 @@
       .sort((a, b) => b.toMillis() - a.toMillis())[0] || null;
     els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(latest);
     els.podiumUpdatedAt.dateTime = latest && typeof latest.toDate === "function" ? latest.toDate().toISOString() : "";
-    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць. Дані оновлюються, коли гравці заходять у гру.";
+    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць.";
   }
 
   function startPodiumSync(db, expectedUID) {
