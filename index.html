@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10131d">
   <title>Майнінг-гра</title>
-  <link rel="stylesheet" href="style.css?v=20261014-2">
+  <link rel="stylesheet" href="style.css?v=20261017-1">
   <script>
     // Diagnostics for login issues, including browser-native form validation.
     window.addEventListener("error", function (event) {
@@ -41,7 +41,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
-  <script src="game.js?v=20261016-2" defer></script>
+  <script src="game.js?v=20261017-1" defer></script>
 </head>
 <body>
 
@@ -80,6 +80,7 @@
       <button class="nav-button active" type="button" data-page="farm">Ферма</button>
       <button class="nav-button" type="button" data-page="exchange">Біржа</button>
       <button class="nav-button" type="button" data-page="shop">Магазин</button>
+      <button class="nav-button" type="button" data-page="podium">Подіум</button>
       <button class="nav-button" type="button" data-page="info">Інформація</button>
     </nav>
 
@@ -122,6 +123,25 @@
       <section class="panel">
         <div class="section-heading"><h2>Магазин</h2></div>
         <div class="shop-list" id="shopList"></div>
+      </section>
+    </section>
+
+    <section class="page-section" id="page-podium" hidden>
+      <section class="panel">
+        <div class="section-heading"><h2>Подіум</h2></div>
+        <p class="hint">Топ-10 гравців за загальним капіталом. Рейтинг оновлюється, коли гравці заходять у гру.</p>
+        <p class="small-note" id="podiumStatus" role="status" aria-live="polite">Завантажуємо рейтинг…</p>
+        <p class="small-note">Останнє оновлення: <time id="podiumUpdatedAt">—</time></p>
+        <div class="podium-table-wrap" role="region" aria-label="Рейтинг гравців" tabindex="0">
+          <table class="podium-table">
+            <thead>
+              <tr><th scope="col">Місце</th><th scope="col">Гравець</th><th scope="col">На рахунку</th><th scope="col">Загальний капітал</th></tr>
+            </thead>
+            <tbody id="podiumRows">
+              <tr><td class="empty-podium" colspan="4">Рейтинг ще формується.</td></tr>
+            </tbody>
+          </table>
+        </div>
       </section>
     </section>
 

@@ -1,0 +1,21 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Each signed-in player can access only their own private save.
+    match /players/{playerId} {
+      allow read, write: if request.auth != null && request.auth.uid == playerId;
+    }
+
+    // The existing browser game advances this shared rate using Firestore transactions.
+    match /market/exchangeRate {
+      allow read, write: if request.auth != null;
+    }
+
+    // Players publish only their own public ranking row; private saves remain private.
+    match /podiumPlayers/{playerId} {
+      allow read: if request.auth != null;
+      allow create, update, delete: if request.auth != null && request.auth.uid == playerId;
+    }
+  }
+}
