@@ -27,12 +27,12 @@ jobs:
         id: google-auth
         with:
           project_id: cryp-togame
-          workload_identity_provider: \${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: \${{ vars.GCP_SERVICE_ACCOUNT }}
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
           token_format: access_token
           access_token_scopes: https://www.googleapis.com/auth/datastore
 
       - name: Recalculate top 10 and publish the safe snapshot
         run: node scripts/update-podium.js
         env:
-          FIREBASE_ACCESS_TOKEN: \${{ steps.google-auth.outputs.access_token }}
+          FIREBASE_ACCESS_TOKEN: ${{ steps.google-auth.outputs.access_token }}
