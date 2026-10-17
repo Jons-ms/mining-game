@@ -1,29 +1,33 @@
 # CRYP Mining
 
-A browser based mining game backed by Firebase Authentication and Cloud Firestore.
+Браузерна гра з авторизацією Firebase та збереженням прогресу у Cloud Firestore.
 
-## Hourly Podium
+## Спільний курс CRYP
 
-The Podium shows up to ten players ranked by:
+Спільний курс і стан його зміни зберігаються у документі `market/exchangeRate`. Клієнти підписуються на нього та оновлюють курс транзакцією Firestore. Наявна логіка курсу збережена.
 
-`cash balance + CRYP balance × current CRYP exchange rate`
+## Рейтинг «Подіум»
 
-A scheduled Cloud Function recalculates the snapshot every hour from the private `players/{uid}` documents and the shared `market/exchangeRate` document. It publishes only `rank`, `nickname`, `cashBalance`, and `totalCapital` for each listed player, plus the snapshot's `updatedAt` timestamp. The public document is `podium/current`; clients can read it while signed in, but cannot write it.
+Подіум показує до десяти гравців за формулою:
 
-The browser never reads other players' private save documents. Firestore rules allow each signed-in player to access only their own `players/{uid}` document. The game continues to update the shared market using its existing authenticated client transaction.
+`баланс гривень + баланс CRYP × поточний курс CRYP`
 
-## Firebase setup
+Запланована Cloud Function раз на годину перераховує рейтинг із приватних документів `players/{uid}` та поточного курсу. У публічний документ `podium/current` потрапляють лише місце, нікнейм, баланс гривень і загальний капітал. Дата оновлення зберігається окремо. Авторизовані клієнти можуть читати цей знімок, але не можуть його змінювати.
 
-1. Compare `firestore.rules` with the rules currently deployed in Firebase Console. The file covers the collections used by this repository. Merge any rules for other project collections before deploying, since deploying these rules replaces the database's current ruleset.
-2. Use the Firebase project configured in `.firebaserc` (`cryp-togame`) or update that alias to the intended project.
-3. Scheduled Cloud Functions require the Blaze plan and Cloud Scheduler. Review the project's billing and enable the Cloud Scheduler API before deployment.
-4. Install function dependencies with `npm --prefix functions install`.
-5. Deploy the rules and scheduled function with `firebase deploy --only firestore:rules,functions:updatePodiumHourly`.
+Клієнт гри не читає збереження інших гравців. Правила Firestore дозволяють кожному гравцю доступ лише до власного документа `players/{uid}`. Поточний курс, як і раніше, змінюється авторизованими клієнтами через транзакцію.
 
-The first podium snapshot appears after the first successful scheduled run. The web app displays its last update time and shows an empty-state message until then.
+## Налаштування Firebase
 
-## Data and trust limits
+1. Звір `firestore.rules` з правилами, які зараз розгорнуті у Firebase Console. Цей файл описує колекції, які використовує репозиторій. Якщо в проєкті є інші колекції, об’єднай їхні правила перед розгортанням: CLI замінить активний набір правил вмістом локального файлу.
+2. Перевір, що `.firebaserc` вказує на потрібний Firebase-проєкт (`cryp-togame`).
+3. Заплановані Cloud Functions потребують план Blaze та Cloud Scheduler. Перевір налаштування білінгу й увімкни Cloud Scheduler API.
+4. Встанови залежності функції: `npm --prefix functions install`.
+5. Розгорни правила та функцію: `firebase deploy --only firestore:rules,functions:updatePodiumHourly`.
 
-The scheduler keeps private account fields and CRYP balances out of the public document. The game currently saves balances from the browser, so a player can alter their own local game state before it is saved. The server-generated ranking prevents a client from writing public ranking entries, but it cannot make client-generated balances tamper-proof. A tamper-proof economy would require moving game balance changes to trusted server code.
+Перший знімок з’явиться після першого успішного щогодинного запуску. До того сторінка покаже, що рейтинг формується.
 
-The scheduled job reads the player collection once per hour and costs scale with the number of player documents.
+## Межі довіри
+
+Публічний документ не містить приватних полів акаунта або кількості CRYP гравців. Проте гра зараз зберігає баланси, сформовані у браузері. Гравець може змінити власний локальний стан до збереження. Серверний перерахунок не дозволяє клієнтам підмінити сам публічний рейтинг, але не робить клієнтські баланси захищеними від накрутки. Для цього ігрові зміни балансу потрібно перенести на довірений сервер.
+
+Функція щогодини читає записи колекції гравців, тому витрати на читання зростатимуть разом із кількістю акаунтів.
