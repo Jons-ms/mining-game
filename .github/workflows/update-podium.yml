@@ -1,0 +1,38 @@
+name: Update Podium
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: podium-hourly
+  cancel-in-progress: false
+
+jobs:
+  update-podium:
+    if: github.repository == 'Jons-ms/mining-game' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: google-github-actions/auth@v3
+        id: google-auth
+        with:
+          project_id: cryp-togame
+          workload_identity_provider: \${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: \${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/datastore
+
+      - name: Recalculate top 10 and publish the safe snapshot
+        run: node scripts/update-podium.js
+        env:
+          FIREBASE_ACCESS_TOKEN: \${{ steps.google-auth.outputs.access_token }}
