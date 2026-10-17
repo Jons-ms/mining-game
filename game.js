@@ -26,7 +26,7 @@
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
     sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
     exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus"),
-    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt"), podiumRate: $("podiumRate")
+    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt")
   };
 
   function newState() {
@@ -328,7 +328,6 @@
     $("infoPrice").textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangePrice) els.exchangePrice.textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangeBalance) els.exchangeBalance.textContent = number(state.cryp) + " CRYP";
-    if (els.podiumRate) els.podiumRate.textContent = marketReady ? money(marketState.price) : "—";
     updateSellPreview();
     renderPodium();
   }
@@ -438,7 +437,7 @@
       .sort((a, b) => b.toMillis() - a.toMillis())[0] || null;
     els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(latest);
     els.podiumUpdatedAt.dateTime = latest && typeof latest.toDate === "function" ? latest.toDate().toISOString() : "";
-    els.podiumStatus.textContent = "Показано " + entries.length + " із 10 місць.";
+    els.podiumStatus.textContent = "";
   }
 
   function startPodiumSync(db, expectedUID) {
