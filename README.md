@@ -18,7 +18,7 @@ GitHub Actions щогодини читає потрібні поля гравц�
 
 ## Одноразове налаштування
 
-Для цього варіанта не потрібні Cloud Functions, Cloud Scheduler чи Firebase Functions білінг. Firestore залишається базою даних, а GitHub Actions запускає розрахунок. Потрібно налаштувати Google Cloud Workload Identity Federation для GitHub Actions:
+Для цього варіанта не потрібні Cloud Functions і Cloud Scheduler. Firestore залишається базою даних, а GitHub Actions запускає розрахунок; діють звичайні тарифи Firestore та ліміти GitHub Actions. Потрібно налаштувати Google Cloud Workload Identity Federation для GitHub Actions:
 
 1. Перевір, що у проєкті `cryp-togame` увімкнений Cloud Firestore API і створений окремий service account лише для рейтингу.
 2. Дай цьому service account доступ до Firestore через власну IAM-роль із дозволами `datastore.databases.get`, `datastore.entities.get`, `datastore.entities.list`, `datastore.entities.create` та `datastore.entities.update`. Вони потрібні для читання гравців/курсу і запису рейтингу. Така роль все одно може читати всі документи бази; не давай обліковому запису ширші ролі Owner/Editor/Admin.
