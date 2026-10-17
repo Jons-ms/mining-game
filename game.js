@@ -16,6 +16,109 @@
     { id: "rtx4090", name: "RTX 4090", icon: "▰", price: 1200, rate: 0.15 }
   ];
 
+  // Shared top-down pixel-art card illustrations for the farm, shop, and inventory.
+  const GPU_ART = {
+    starter: {
+      label: "GPU I", centers: [24, 48], scale: 0.78,
+      case: "#69747a", face: "#899398", shadow: "#39434b",
+      trim: "#c3c9c8", fanRing: "#3d474d", fanFace: "#657178",
+      blade: "#a5afb1", accent: "#d7dcda", metal: "#b7c0c1"
+    },
+    rtx3060: {
+      label: "GPU II", centers: [18, 36, 54], scale: 0.62,
+      case: "#1c293b", face: "#2a3b53", shadow: "#111c2a",
+      trim: "#3e6892", fanRing: "#121e2b", fanFace: "#263b51",
+      blade: "#5684aa", accent: "#53baff", metal: "#7b91a2"
+    },
+    rtx4090: {
+      label: "GPU III", centers: [18, 36, 54], scale: 0.74,
+      case: "#302b24", face: "#49402f", shadow: "#191916",
+      trim: "#a17b3c", fanRing: "#1e1b17", fanFace: "#3a3124",
+      blade: "#94713b", accent: "#f0c75b", metal: "#d0b77d"
+    }
+  };
+  const SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svgShape(parent, name, attributes) {
+    const shape = document.createElementNS(SVG_NS, name);
+    Object.entries(attributes).forEach(([key, value]) => shape.setAttribute(key, String(value)));
+    parent.appendChild(shape);
+    return shape;
+  }
+
+  function drawGpuFan(svg, x, y, scale, art) {
+    const fan = svgShape(svg, "g", { transform: "translate(" + x + " " + y + ") scale(" + scale + ")" });
+    const outer = "M-4 -12h8v2h4v3h3v4h2v8h-2v4h-3v3h-4v2h-8v-2h-4v-3h-3v-4h-2v-8h2v-4h3v-3h4z";
+    const inner = "M-3 -9h6v2h3v3h2v6h-2v3h-3v2h-6v-2h-3v-3h-2v-6h2v-3h3z";
+    svgShape(fan, "path", { d: outer, fill: art.shadow });
+    svgShape(fan, "path", { d: inner, fill: art.fanRing });
+    [0, 120, 240].forEach((angle) => {
+      svgShape(fan, "path", {
+        d: "M-2 -7h4v4L0 -1l-2-2z",
+        fill: art.blade,
+        transform: "rotate(" + angle + ")"
+      });
+    });
+    svgShape(fan, "rect", { x: -4, y: -4, width: 8, height: 8, fill: art.fanFace });
+    svgShape(fan, "rect", { x: -2, y: -2, width: 4, height: 4, fill: art.accent });
+    svgShape(fan, "rect", { x: -1, y: -1, width: 2, height: 2, fill: art.shadow });
+  }
+
+  function createGpuIcon(gpu, className) {
+    const art = GPU_ART[gpu?.id] || GPU_ART.starter;
+    const svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("class", className);
+    svg.setAttribute("viewBox", "0 0 72 48");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", gpu?.name || art.label);
+    svg.setAttribute("shape-rendering", "crispEdges");
+    svg.setAttribute("focusable", "false");
+    const title = svgShape(svg, "title", {});
+    title.textContent = gpu?.name || art.label;
+
+    // Layered, square-edged shroud and exposed metal bracket.
+    svgShape(svg, "path", {
+      d: "M7 4h57v2h4v33h-4v2H7v-2H4V7h3z",
+      fill: art.shadow
+    });
+    svgShape(svg, "path", {
+      d: "M8 6h55v2h3v29h-3v2H8v-2H6V8h2z",
+      fill: art.case
+    });
+    svgShape(svg, "path", {
+      d: "M10 8h52v2h2v25h-2v2H10v-2H8V10h2z",
+      fill: art.face
+    });
+    svgShape(svg, "rect", { x: 1, y: 13, width: 6, height: 15, fill: art.metal });
+    svgShape(svg, "rect", { x: 2, y: 15, width: 2, height: 3, fill: art.shadow });
+    svgShape(svg, "rect", { x: 2, y: 23, width: 2, height: 3, fill: art.shadow });
+
+    // The reinforced third model has a wider, gold-edged armor rail.
+    if (gpu?.id === "rtx4090") {
+      svgShape(svg, "rect", { x: 9, y: 10, width: 2, height: 25, fill: art.trim });
+      svgShape(svg, "rect", { x: 61, y: 10, width: 2, height: 25, fill: art.trim });
+      svgShape(svg, "rect", { x: 12, y: 10, width: 48, height: 1, fill: art.accent });
+      svgShape(svg, "rect", { x: 12, y: 35, width: 48, height: 1, fill: art.accent });
+    } else {
+      svgShape(svg, "rect", { x: 10, y: 9, width: 52, height: 1, fill: art.trim });
+      svgShape(svg, "rect", { x: 10, y: 36, width: 52, height: 1, fill: art.trim });
+    }
+
+    art.centers.forEach((center) => drawGpuFan(svg, center, 22, art.scale, art));
+
+    // Blocky screws, vents, and PCIe contacts stay legible at small sizes.
+    [11, 62].forEach((x) => {
+      svgShape(svg, "rect", { x, y: 12, width: 2, height: 2, fill: art.accent });
+      svgShape(svg, "rect", { x, y: 31, width: 2, height: 2, fill: art.accent });
+    });
+    [13, 17, 21, 25, 29, 33, 37, 41, 45, 49, 53, 57].forEach((x) => {
+      svgShape(svg, "rect", { x, y: 40, width: 2, height: 4, fill: art.accent });
+    });
+    svgShape(svg, "rect", { x: 11, y: 41, width: 9, height: 2, fill: art.shadow });
+    svgShape(svg, "rect", { x: 53, y: 41, width: 8, height: 2, fill: art.shadow });
+    return svg;
+  }
+
   const $ = (id) => document.getElementById(id);
   const els = {
     cash: $("cashValue"), cryp: $("crypValue"), rate: $("rateValue"),
@@ -467,10 +570,7 @@
       button.className = "slot" + (gpu ? " occupied" : "");
       button.setAttribute("aria-label", gpu ? gpu.name + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
       if (gpu) {
-        const icon = document.createElement("span");
-        icon.className = "farm-gpu-icon";
-        icon.textContent = gpu.icon || "▰";
-        button.appendChild(icon);
+        button.appendChild(createGpuIcon(gpu, "farm-gpu-icon"));
         button.title = gpu.name + " — натисни для дій";
         button.addEventListener("click", () => openGPUActions(index));
       } else {
@@ -487,9 +587,7 @@
   function shopCard(gpuType) {
     const item = document.createElement("div");
     item.className = "shop-item";
-    const icon = document.createElement("div");
-    icon.className = "gpu-icon";
-    icon.textContent = gpuType.icon;
+    const icon = createGpuIcon(gpuType, "gpu-icon");
     const info = document.createElement("div");
     info.className = "shop-info";
     const title = document.createElement("strong");
@@ -526,9 +624,7 @@
     state.inventory.forEach((gpu) => {
       const item = document.createElement("div");
       item.className = "shop-item inventory-item";
-      const icon = document.createElement("div");
-      icon.className = "gpu-icon";
-      icon.textContent = gpu.icon || "▰";
+      const icon = createGpuIcon(gpu, "gpu-icon");
       const info = document.createElement("div");
       info.className = "shop-info";
       const title = document.createElement("strong");
