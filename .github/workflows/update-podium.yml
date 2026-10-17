@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   update-podium:
-    if: github.repository == 'Jons-ms/mining-game' && github.ref == 'refs/heads/main'
+    if: github.repository == 'Jons-ms/mining-game' && github.ref == 'refs/heads/main' && vars.GCP_WORKLOAD_IDENTITY_PROVIDER != '' && vars.GCP_SERVICE_ACCOUNT != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
