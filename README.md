@@ -1,10 +1,10 @@
 # CRYP Mining
 
-Браузерна гра з авторизацією Firebase та збереженням прогресу у Cloud Firestore.
+Браузерна гра з Firebase Auth та збереженням прогресу в Cloud Firestore.
 
 ## Спільний курс CRYP
 
-Спільний курс і стан його зміни зберігаються у документі `market/exchangeRate`. Клієнти підписуються на нього та оновлюють курс транзакцією Firestore. Наявна логіка курсу збережена.
+Спільний курс і стан його зміни зберігаються у документі `market/exchangeRate`. Клієнти підписуються на нього та оновлюють курс транзакцією Firestore.
 
 ## Рейтинг «Подіум»
 
@@ -12,30 +12,23 @@
 
 `баланс гривень + баланс CRYP × поточний курс CRYP`
 
-GitHub Actions щогодини читає потрібні поля гравців і поточний курс, визначає топ-10 та записує у `podium/current` лише місце, нікнейм, баланс гривень і загальний капітал. `updatedAt` ставить сам Firestore. Workflow запускається о 17-й хвилині кожної години за UTC, щоб зменшити затримки через пікове навантаження на початку години. GitHub може відкласти запланований запуск під час високого навантаження, тому оновлення не є точним до хвилини.
+Коли гравець входить у гру та зберігає прогрес, його клієнт оновлює власний публічний документ у колекції `podiumPlayers`. Сторінка рейтингу читає ці публічні рядки й обчислює топ-10 на пристрої за поточним спільним курсом. Коли новий гравець заходить або зберігає гру, відкриті сторінки отримують оновлення через Firestore.
 
-Сайт підписується тільки на публічний документ рейтингу. Правила Firestore дозволяють гравцю читати/змінювати лише власне збереження `players/{uid}`, а клієнтам — лише читати `podium/current`. Серверний REST API працює через окремий обліковий запис Google Cloud і обходить Firestore Security Rules, тому workflow вибірково читає тільки поля `playerName`, `cash`, `cryp` та ніколи не записує UID або приватні поля у публічний рейтинг.
+Для цього варіанта не потрібні Cloud Functions, Cloud Scheduler, GitHub Actions чи окреме налаштування Google Cloud IAM. Потрібні лише Firebase Auth і вже створена Firestore база.
 
-## Одноразове налаштування
+## Правила Firestore
 
-Для цього варіанта не потрібні Cloud Functions і Cloud Scheduler. Firestore залишається базою даних, а GitHub Actions запускає розрахунок; діють звичайні тарифи Firestore та ліміти GitHub Actions. Потрібно налаштувати Google Cloud Workload Identity Federation для GitHub Actions:
+Додай правило для власного публічного рядка рейтингу всередині `match /databases/{database}/documents`:
 
-1. Перевір, що у проєкті `cryp-togame` увімкнений Cloud Firestore API і створений окремий service account лише для рейтингу.
-2. Дай цьому service account доступ до Firestore через власну IAM-роль із дозволами `datastore.databases.get`, `datastore.entities.get`, `datastore.entities.list`, `datastore.entities.create` та `datastore.entities.update`. Вони потрібні для читання гравців/курсу і запису рейтингу. Така роль все одно може читати всі документи бази; не давай обліковому запису ширші ролі Owner/Editor/Admin.
-3. Створи Workload Identity Pool і OIDC Provider для issuer `https://token.actions.githubusercontent.com`. Зістав claims `google.subject=assertion.sub`, `attribute.repository=assertion.repository`, `attribute.ref=assertion.ref`, `attribute.workflow_ref=assertion.workflow_ref`; обмеж умову provider репозиторієм `Jons-ms/mining-game`, гілкою `refs/heads/main` і workflow `Jons-ms/mining-game/.github/workflows/update-podium.yml@refs/heads/main`.
-4. Дозволь цьому provider impersonate service account через роль `roles/iam.workloadIdentityUser`, обмеживши прив’язку репозиторієм `Jons-ms/mining-game`.
-5. У GitHub відкрий **Settings → Secrets and variables → Actions → Variables** і додай:
-   - `GCP_WORKLOAD_IDENTITY_PROVIDER` — повний resource name provider-а, наприклад `projects/123456789/locations/global/workloadIdentityPools/github/providers/mining-game`;
-   - `GCP_SERVICE_ACCOUNT` — email service account-а.
-   
-   Використовується короткоживучий OIDC-токен; постійний JSON-ключ у GitHub зберігати не потрібно.
-6. Перед розгортанням звір `firestore.rules` з правилами у Firebase Console. Об’єднай наявні правила, якщо база має інші колекції: розгортання локального файлу замінює весь активний набір. Після перевірки опублікуй правила командою `firebase deploy --only firestore:rules`.
-7. Злий PR у `main`. У GitHub відкрий **Actions → Update Podium → Run workflow**, запусти workflow вручну та перевір, що документ `podium/current` створився. Після цього він оновлюватиметься за розкладом.
+```text
+match /podiumPlayers/{playerId} {
+  allow read: if request.auth != null;
+  allow create, update, delete: if request.auth != null && request.auth.uid == playerId;
+}
+```
 
-Знімок створюється вже першим успішним запуском. Щогодинний розклад GitHub працює лише після появи workflow у default branch; запуски можна перевіряти у вкладці **Actions**.
+Воно дає авторизованим гравцям змогу читати публічні рядки Подіуму, а кожному гравцеві — змінювати лише власний рядок. Приватні документи `players/{uid}` і далі доступні тільки їхнім власникам. Застосуй оновлені правила з файлу `firestore.rules` у Firebase Console.
 
-## Межі довіри та витрати
+## Оновлення та точність
 
-Публічний документ не містить балансу CRYP або інших приватних полів. Але баланс гравця зараз формується у браузері; гравець може змінити власний стан до збереження. Серверне формування рейтингу захищає публічний документ від запису клієнтами, але не захищає гру від накрутки балансу.
-
-Кожне оновлення читає всіх гравців, тому кількість читань зростає з кількістю акаунтів. GitHub Actions може затримати розклад під навантаженням; це щогодинне фонове оновлення, а не гарантований запуск точно у визначену хвилину.
+Рейтинг оновлюється, коли гравці заходять у гру або зберігають прогрес; якщо ніхто не заходить, нових даних не з’явиться. Баланси зберігаються в клієнтській грі, тому гравець може змінити власні дані. Це підходить для дружньої гри, але рейтинг не захищений від накрутки.
