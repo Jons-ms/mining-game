@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10131d">
   <title>Майнінг-гра</title>
-  <link rel="stylesheet" href="style.css?v=20261018-2">
+  <link rel="stylesheet" href="style.css?v=20261018-3">
   <script>
     // Diagnostics for login issues, including browser-native form validation.
     window.addEventListener("error", function (event) {
@@ -41,7 +41,7 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
-  <script src="game.js?v=20261018-3" defer></script>
+  <script src="game.js?v=20261018-4" defer></script>
 </head>
 <body>
 
@@ -90,7 +90,13 @@
           <div><h2>Ферма</h2></div>
           <button class="primary-button" id="openShop">＋ Купити відеокарту</button>
         </div>
-        <div class="farm-grid" id="farmGrid" aria-label="Слоти ферми"></div>
+        <div class="farm-switcher" id="farmSwitcher" hidden aria-label="Перемикання поля ферми">
+          <button class="secondary-button" id="farmPrevious" type="button" aria-label="Перейти на основне поле">← Основне</button>
+          <span id="farmFieldLabel" aria-live="polite">Основне поле</span>
+          <button class="secondary-button" id="farmNext" type="button" aria-label="Перейти на додаткове поле">Додаткове →</button>
+        </div>
+        <p class="small-note farm-swipe-hint" id="farmSwipeHint" hidden>Свайпни вліво, щоб перейти на додаткове поле, або скористайся кнопкою.</p>
+        <div class="farm-grid" id="farmGrid" aria-label="Слоти основного поля"></div>
       </section>
     </section>
 

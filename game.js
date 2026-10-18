@@ -7,6 +7,9 @@
   let cloudSaveTimer = null;
   let cloudSaveInProgress = Promise.resolve();
   const SLOT_COUNT = 16;
+  const FIELD_PRICE = 5000;
+  const FIELD_CELL_PRICE = 10000;
+  const INITIAL_EXTRA_UNLOCKED = 8;
   const MIN_PRICE = 0.25;
   const MAX_PRICE = 7;
 
@@ -129,7 +132,9 @@
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
     sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
     exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus"),
-    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt")
+    podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt"),
+    farmSwitcher: $("farmSwitcher"), farmFieldLabel: $("farmFieldLabel"),
+    farmSwipeHint: $("farmSwipeHint"), farmPrevious: $("farmPrevious"), farmNext: $("farmNext")
   };
 
   function newState() {
@@ -138,8 +143,25 @@
       cash: 490,
       cryp: 0,
       slots: Array(SLOT_COUNT).fill(null),
-      inventory: []
+      inventory: [],
+      hasExtraField: false,
+      extraSlots: Array(SLOT_COUNT).fill(null),
+      extraUnlockedSlots: Array.from({ length: SLOT_COUNT }, (_, index) => index < INITIAL_EXTRA_UNLOCKED)
     };
+  }
+
+  function normalizeSavedState(saved) {
+    const normalized = { ...newState(), ...saved };
+    const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
+    normalized.slots = Array.from({ length: SLOT_COUNT }, (_, index) => saved.slots[index] || null)
+      .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
+    normalized.inventory = Array.isArray(saved.inventory) ? saved.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
+    normalized.hasExtraField = saved.hasExtraField === true;
+    normalized.extraSlots = Array.from({ length: SLOT_COUNT }, (_, index) => saved.extraSlots?.[index] || null);
+    const savedUnlocks = Array.isArray(saved.extraUnlockedSlots) && saved.extraUnlockedSlots.length ? saved.extraUnlockedSlots : null;
+    normalized.extraUnlockedSlots = Array.from({ length: SLOT_COUNT }, (_, index) => savedUnlocks ? savedUnlocks[index] === true : index < INITIAL_EXTRA_UNLOCKED);
+    normalized.extraSlots = normalized.extraSlots.map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
+    return normalized;
   }
 
   const INITIAL_MARKET_STATE = {
@@ -163,13 +185,7 @@
     try {
       const saved = SAVE_KEY ? JSON.parse(localStorage.getItem(SAVE_KEY)) : null;
       if (saved && Array.isArray(saved.slots)) {
-        const state = { ...newState(), ...saved };
-        state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null);
-        state.inventory = Array.isArray(saved.inventory) ? saved.inventory : [];
-        // Preserve purchase cost for old saves and new cards.
-        const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
-        state.slots = state.slots.map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
-        state.inventory = state.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) }));
+        const state = normalizeSavedState(saved);
         // Update untouched older saves to the current starting balance without changing active progress.
         if ((saved.cash === 300 || saved.cash === 1000) && saved.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
         // Older local saves may contain a device-specific rate; the shared Firestore market is authoritative.
@@ -188,6 +204,9 @@
   let state = loadState();
   let targetSlotIndex = null;
   let actionSlotIndex = null;
+  let activeFarm = 0;
+  let farmTouchStart = null;
+  let suppressFarmClickUntil = 0;
   let lastVisibleTick = document.hidden ? null : Date.now();
   let hiddenAt = null;
   let toastTimeout = null;
@@ -201,7 +220,7 @@
   }
 
   function allGPUs() {
-    return state.slots.filter(Boolean);
+    return state.slots.concat(state.hasExtraField ? state.extraSlots : []).filter(Boolean);
   }
 
   function totalRate() {
@@ -422,7 +441,8 @@
     els.cash.textContent = money(state.cash);
     els.cryp.textContent = number(state.cryp) + " CRYP";
     els.rate.textContent = number(totalRate()) + " CRYP/с";
-    els.gpuCount.textContent = allGPUs().length + " / " + SLOT_COUNT + " встановлено";
+    const availableSlots = SLOT_COUNT + (state.hasExtraField ? state.extraUnlockedSlots.filter(Boolean).length : 0);
+    els.gpuCount.textContent = allGPUs().length + " / " + availableSlots + " встановлено";
     els.price.textContent = marketReady ? money(marketState.price) : "—";
     $("infoCash").textContent = money(state.cash);
     $("infoCryp").textContent = number(state.cryp) + " CRYP";
@@ -562,23 +582,58 @@
     });
   }
 
+  function activeFarmSlots() {
+    return activeFarm === 1 && state.hasExtraField ? state.extraSlots : state.slots;
+  }
+
+  function showFarmField(fieldIndex) {
+    if (!state.hasExtraField) return;
+    activeFarm = fieldIndex === 1 ? 1 : 0;
+    renderFarm();
+  }
+
   function renderFarm() {
+    const isExtraField = activeFarm === 1 && state.hasExtraField;
+    const slots = activeFarmSlots();
     els.grid.replaceChildren();
-    state.slots.forEach((gpu, index) => {
+    els.farmSwitcher.hidden = !state.hasExtraField;
+    els.farmSwipeHint.hidden = !state.hasExtraField;
+    els.farmFieldLabel.textContent = isExtraField ? "Додаткове поле" : "Основне поле";
+    els.farmPrevious.disabled = !isExtraField;
+    els.farmNext.disabled = isExtraField;
+    els.grid.setAttribute("aria-label", isExtraField ? "Слоти додаткового поля" : "Слоти основного поля");
+
+    slots.forEach((gpu, index) => {
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "slot" + (gpu ? " occupied" : "");
-      button.setAttribute("aria-label", gpu ? gpu.name + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
-      if (gpu) {
-        button.appendChild(createGpuIcon(gpu, "farm-gpu-icon"));
-        button.title = gpu.name + " — натисни для дій";
-        button.addEventListener("click", () => openGPUActions(index));
+      if (isExtraField && !state.extraUnlockedSlots[index]) {
+        button.className = "slot locked";
+        button.setAttribute("aria-label", "Заблокована клітинка " + (index + 1) + ", відкрити за " + money(FIELD_CELL_PRICE));
+        button.title = "Придбати клітинку за " + money(FIELD_CELL_PRICE);
+        const lock = document.createElement("span");
+        lock.className = "lock-icon";
+        lock.textContent = "🔒";
+        const label = document.createElement("strong");
+        label.textContent = "Відкрити клітинку";
+        const price = document.createElement("span");
+        price.className = "locked-price";
+        price.textContent = money(FIELD_CELL_PRICE);
+        button.append(lock, label, price);
+        button.addEventListener("click", () => purchaseExtraCell(index));
       } else {
-        const plus = document.createElement("span");
-        plus.className = "plus";
-        plus.textContent = "+";
-        button.appendChild(plus);
-        button.addEventListener("click", () => openInventory(index));
+        button.className = "slot" + (gpu ? " occupied" : "");
+        button.setAttribute("aria-label", gpu ? gpu.name + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
+        if (gpu) {
+          button.appendChild(createGpuIcon(gpu, "farm-gpu-icon"));
+          button.title = gpu.name + " — натисни для дій";
+          button.addEventListener("click", () => openGPUActions(index));
+        } else {
+          const plus = document.createElement("span");
+          plus.className = "plus";
+          plus.textContent = "+";
+          button.appendChild(plus);
+          button.addEventListener("click", () => openInventory(index));
+        }
       }
       els.grid.appendChild(button);
     });
@@ -605,9 +660,34 @@
     return item;
   }
 
+  function farmFieldShopCard() {
+    const item = document.createElement("div");
+    item.className = "shop-item";
+    const icon = document.createElement("div");
+    icon.className = "field-shop-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "🌱";
+    const info = document.createElement("div");
+    info.className = "shop-info";
+    const title = document.createElement("strong");
+    title.textContent = "Додаткове поле ферми";
+    const details = document.createElement("span");
+    details.textContent = "Поле 4 × 4 з 8 доступними клітинками";
+    info.append(title, details);
+    const buy = document.createElement("button");
+    buy.type = "button";
+    buy.className = "shop-buy";
+    buy.textContent = state.hasExtraField ? "Придбано" : money(FIELD_PRICE);
+    buy.disabled = state.hasExtraField || state.cash < FIELD_PRICE;
+    buy.addEventListener("click", purchaseExtraField);
+    item.append(icon, info, buy);
+    return item;
+  }
+
   function renderShop() {
     els.shop.replaceChildren();
     GPU_TYPES.forEach((gpu) => els.shop.appendChild(shopCard(gpu)));
+    els.shop.appendChild(farmFieldShopCard());
   }
 
   function renderInventory() {
@@ -661,8 +741,37 @@
     showToast(gpuType.name + " додано в інвентар.");
   }
 
+  function purchaseExtraField() {
+    if (state.hasExtraField) return;
+    if (state.cash < FIELD_PRICE) {
+      showToast("Для нового поля потрібно " + money(FIELD_PRICE) + ".");
+      return;
+    }
+    state.cash -= FIELD_PRICE;
+    state.hasExtraField = true;
+    state.extraSlots = Array.from({ length: SLOT_COUNT }, (_, index) => state.extraSlots[index] || null);
+    state.extraUnlockedSlots = Array.from({ length: SLOT_COUNT }, (_, index) => index < INITIAL_EXTRA_UNLOCKED);
+    activeFarm = 0;
+    render();
+    save();
+    showToast("Додаткове поле придбано. Проведи вліво у Фермі, щоб перейти до нього.");
+  }
+
+  function purchaseExtraCell(index) {
+    if (!state.hasExtraField || state.extraUnlockedSlots[index]) return;
+    if (state.cash < FIELD_CELL_PRICE) {
+      showToast("Для клітинки потрібно " + money(FIELD_CELL_PRICE) + ".");
+      return;
+    }
+    state.cash -= FIELD_CELL_PRICE;
+    state.extraUnlockedSlots[index] = true;
+    render();
+    save();
+    showToast("Клітинку " + (index + 1) + " відкрито.");
+  }
+
   function openGPUActions(slotIndex) {
-    const gpu = state.slots[slotIndex];
+    const gpu = activeFarmSlots()[slotIndex];
     if (!gpu) return;
     actionSlotIndex = slotIndex;
     const resalePrice = (Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)) * 0.5;
@@ -679,7 +788,8 @@
   function removeGPUFromFarm() {
     if (actionSlotIndex === null) return;
     const slotIndex = actionSlotIndex;
-    const gpu = state.slots[slotIndex];
+    const slots = activeFarmSlots();
+    const gpu = slots[slotIndex];
     if (!gpu) {
       closeGPUActions();
       return;
@@ -693,7 +803,7 @@
       rate: gpu.rate || 0,
       cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)
     });
-    state.slots[slotIndex] = null;
+    slots[slotIndex] = null;
     closeGPUActions();
     render();
     save();
@@ -703,7 +813,8 @@
   function sellGPUFromFarm() {
     if (actionSlotIndex === null) return;
     const slotIndex = actionSlotIndex;
-    const gpu = state.slots[slotIndex];
+    const slots = activeFarmSlots();
+    const gpu = slots[slotIndex];
     if (!gpu) {
       closeGPUActions();
       return;
@@ -711,7 +822,7 @@
     const originalCost = Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
     const resalePrice = originalCost * 0.5;
     state.cash += resalePrice;
-    state.slots[slotIndex] = null;
+    slots[slotIndex] = null;
     closeGPUActions();
     render();
     save();
@@ -731,14 +842,15 @@
   }
 
   function installInventoryGPU(inventoryId) {
-    if (targetSlotIndex === null || state.slots[targetSlotIndex]) {
+    const slots = activeFarmSlots();
+    if (targetSlotIndex === null || slots[targetSlotIndex]) {
       closeInventory();
       return;
     }
     const inventoryIndex = state.inventory.findIndex((gpu) => gpu.inventoryId === inventoryId);
     if (inventoryIndex < 0) return;
     const gpu = state.inventory.splice(inventoryIndex, 1)[0];
-    state.slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate, cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0) };
+    slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate, cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0) };
     const installedName = gpu.name;
     closeInventory();
     render();
@@ -826,6 +938,32 @@
       save();
     }
   });
+
+  els.farmPrevious.addEventListener("click", () => showFarmField(0));
+  els.farmNext.addEventListener("click", () => showFarmField(1));
+
+  els.grid.addEventListener("touchstart", (event) => {
+    if (event.touches.length === 1) {
+      const touch = event.touches[0];
+      farmTouchStart = { x: touch.clientX, y: touch.clientY };
+    }
+  }, { passive: true });
+  els.grid.addEventListener("touchend", (event) => {
+    if (!farmTouchStart || !event.changedTouches.length) return;
+    const touch = event.changedTouches[0];
+    const deltaX = touch.clientX - farmTouchStart.x;
+    const deltaY = touch.clientY - farmTouchStart.y;
+    farmTouchStart = null;
+    if (!state.hasExtraField || Math.abs(deltaX) < 55 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return;
+    suppressFarmClickUntil = Date.now() + 500;
+    showFarmField(deltaX < 0 ? 1 : 0);
+  }, { passive: true });
+  els.grid.addEventListener("click", (event) => {
+    if (Date.now() < suppressFarmClickUntil) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
 
   $("closeGpuAction").addEventListener("click", closeGPUActions);
   $("cancelGpuAction").addEventListener("click", closeGPUActions);
@@ -1028,15 +1166,11 @@
             if (snapshot.exists) {
               const remote = snapshot.data();
               if (remote && Array.isArray(remote.slots)) {
-                const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
-                state = { ...newState(), ...remote };
+                state = normalizeSavedState(remote);
                 delete state.price;
                 delete state.lastPriceAt;
                 delete state.trendDirection;
                 delete state.trendTicksLeft;
-                state.slots = Array.from({ length: SLOT_COUNT }, (_, i) => state.slots[i] || null)
-                  .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
-                state.inventory = Array.isArray(remote.inventory) ? remote.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
                 // Update untouched older cloud saves to the current starting balance.
                 if ((remote.cash === 300 || remote.cash === 1000) && remote.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
                 localStorage.setItem(SAVE_KEY, JSON.stringify(state));
