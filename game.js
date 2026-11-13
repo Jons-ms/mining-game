@@ -224,9 +224,16 @@
   let blueMarketUnsubscribe = null;
   let blueMarketReady = false;
   let blueMarketUpdateInProgress = false;
+  // Cloud writes are expensive (Firestore daily quota), so periodic saves are throttled and skipped when nothing changed.
+  const CLOUD_SAVE_PERIODIC_INTERVAL = 30000;
+  // A shared rate timestamp further in the future than this is treated as poisoned by a wrong device clock.
+  const MAX_CLOCK_SKEW_MS = 60000;
+  let lastCloudSaveAt = 0;
+  let lastCloudSaveSignature = "";
   let podiumUnsubscribe = null;
   let podiumPublishTimer = null;
   let podiumProfiles = [];
+  let podiumRenderKey = "";
   let lastPodiumPublishAt = 0;
   let lastPodiumPublishSignature = "";
 
@@ -235,8 +242,6 @@
       const saved = SAVE_KEY ? JSON.parse(localStorage.getItem(SAVE_KEY)) : null;
       if (saved && Array.isArray(saved.slots)) {
         const state = normalizeSavedState(saved);
-        // Update untouched older saves to the current starting balance without changing active progress.
-        if ((saved.cash === 300 || saved.cash === 1000) && saved.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
         // Older local saves may contain a device-specific rate; the shared Firestore market is authoritative.
         delete state.price;
         delete state.lastPriceAt;
@@ -280,20 +285,33 @@
     return allGPUs().reduce((sum, gpu) => sum + (gpu.currency === currency ? (gpu.rate || 0) : 0), 0);
   }
 
-  function save() {
+  function stateSignature() {
+    return JSON.stringify({ ...state, savedAt: 0 });
+  }
+
+  // save() always writes locally. Cloud writes happen shortly after player actions; the
+  // once-per-5-seconds timer passes { periodic: true }, which is throttled and skips unchanged state.
+  function save(options = {}) {
     if (!SAVE_KEY) return;
 
     try {
+      state.savedAt = Date.now();
       localStorage.setItem(SAVE_KEY, JSON.stringify(state));
       if (!cloudSaveReady || !currentUserUID || !window.crypFirebase?.db) {
         els.saveStatus.textContent = "Збережено на цьому пристрої";
         return;
       }
 
+      if (options.periodic) {
+        if (Date.now() - lastCloudSaveAt < CLOUD_SAVE_PERIODIC_INTERVAL) return;
+        if (stateSignature() === lastCloudSaveSignature) return;
+      }
+
       clearTimeout(cloudSaveTimer);
       cloudSaveTimer = setTimeout(() => {
         const uid = currentUserUID;
         const stateToSave = JSON.parse(JSON.stringify(state));
+        const signature = stateSignature();
         cloudSaveInProgress = cloudSaveInProgress
           .catch(() => {})
           .then(() => {
@@ -303,6 +321,8 @@
               updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
             }).then(() => {
               if (uid === currentUserUID) {
+                lastCloudSaveAt = Date.now();
+                lastCloudSaveSignature = signature;
                 els.saveStatus.textContent = "Збережено в хмарі";
                 queuePodiumPublish(window.crypFirebase.db, uid);
               }
@@ -386,6 +406,13 @@
     return { price: Number(price.toFixed(4)), trendDirection: direction, trendTicksLeft: ticksLeft };
   }
 
+  // A device with a wrong clock could write a timestamp far in the future and freeze the shared rate for everyone.
+  // Such values are treated as stale so any correctly clocked client can move the rate again.
+  function sanitizeLastPriceAt(value) {
+    if (!Number.isFinite(value) || value <= 0) return Date.now();
+    return value > Date.now() + MAX_CLOCK_SKEW_MS ? 0 : value;
+  }
+
   function normalizedMarketState(data) {
     const parsedLastAt = Number(data.lastPriceAt);
     const direction = Number(data.trendDirection);
@@ -394,7 +421,7 @@
       price: clampPrice(data.price),
       trendDirection: direction === -1 || direction === 1 ? direction : 0,
       trendTicksLeft: Number.isFinite(ticksLeft) ? Math.max(0, Math.floor(ticksLeft)) : 0,
-      lastPriceAt: Number.isFinite(parsedLastAt) && parsedLastAt > 0 ? parsedLastAt : Date.now()
+      lastPriceAt: sanitizeLastPriceAt(parsedLastAt)
     };
   }
 
@@ -533,7 +560,7 @@
       price: clampBluePrice(data.price),
       trendDirection: direction === -1 || direction === 1 ? direction : 0,
       trendTicksLeft: Number.isFinite(ticksLeft) ? Math.max(0, Math.floor(ticksLeft)) : 0,
-      lastPriceAt: Number.isFinite(parsedLastAt) && parsedLastAt > 0 ? parsedLastAt : Date.now()
+      lastPriceAt: sanitizeLastPriceAt(parsedLastAt)
     };
   }
 
@@ -656,6 +683,9 @@
 
   function renderPodiumMessage(message) {
     if (!els.podiumRows) return;
+    const key = "message:" + message;
+    if (podiumRenderKey === key) return;
+    podiumRenderKey = key;
     const row = document.createElement("tr");
     const cell = document.createElement("td");
     cell.colSpan = 4;
@@ -671,6 +701,7 @@
     if (podiumPublishTimer) clearTimeout(podiumPublishTimer);
     podiumPublishTimer = null;
     podiumProfiles = [];
+    podiumRenderKey = "";
   }
 
   function queuePodiumPublish(db, expectedUID) {
@@ -719,50 +750,57 @@
 
   function renderPodium() {
     if (!els.podiumRows) return;
-    if (!marketReady || !blueMarketReady) {
-      renderPodiumMessage("Завантажуємо спільні курси CRYP і Blue…");
-      if (els.podiumStatus) els.podiumStatus.textContent = "Завантажуємо спільні курси CRYP і Blue…";
+    // The ranking needs only the CRYP rate. If the Blue rate is unavailable (outage, rules not yet published),
+    // Blue is valued at its minimum rate instead of hiding the whole ranking.
+    if (!marketReady) {
+      renderPodiumMessage("Завантажуємо поточний курс CRYP…");
+      if (els.podiumStatus) els.podiumStatus.textContent = "Завантажуємо поточний курс CRYP…";
       return;
     }
     const currentRate = marketState.price;
-    const currentBlueRate = blueMarketState.price;
+    const currentBlueRate = blueMarketReady ? blueMarketState.price : BLUE_MIN_PRICE;
     const entries = podiumProfiles.map((profile) => {
       const cashBalance = Math.max(0, Number(profile.cashBalance) || 0);
       const crypBalance = Math.max(0, Number(profile.crypBalance) || 0);
       const blueBalance = Math.max(0, Number(profile.blueBalance) || 0);
       return {
-        nickname: profile.nickname || "Гравець",
+        nickname: String(profile.nickname || "Гравець").slice(0, 20),
         cashBalance,
         totalCapital: cashBalance + crypBalance * currentRate + blueBalance * currentBlueRate,
         updatedAt: profile.updatedAt
       };
     }).sort((a, b) => b.totalCapital - a.totalCapital || a.nickname.localeCompare(b.nickname, "uk")).slice(0, 10);
-    els.podiumRows.replaceChildren();
 
     if (!entries.length) {
       renderPodiumMessage("Рейтинг з’явиться, коли гравці зайдуть у гру.");
     } else {
-      entries.forEach((entry, index) => {
-        const row = document.createElement("tr");
-        const rank = document.createElement("td");
-        const nickname = document.createElement("td");
-        const cash = document.createElement("td");
-        const total = document.createElement("td");
-        rank.textContent = String(Number(entry.rank) || index + 1);
-        nickname.textContent = String(entry.nickname || "Гравець").slice(0, 20);
-        cash.textContent = money(entry.cashBalance);
-        total.textContent = money(entry.totalCapital);
-        row.append(rank, nickname, cash, total);
-        els.podiumRows.appendChild(row);
-      });
+      // Rebuild the table only when its visible content changed (render runs every second).
+      const key = "rows:" + JSON.stringify(entries.map((entry) => [entry.nickname, money(entry.cashBalance), money(entry.totalCapital)]));
+      if (key !== podiumRenderKey) {
+        podiumRenderKey = key;
+        els.podiumRows.replaceChildren();
+        entries.forEach((entry, index) => {
+          const row = document.createElement("tr");
+          const rank = document.createElement("td");
+          const nickname = document.createElement("td");
+          const cash = document.createElement("td");
+          const total = document.createElement("td");
+          rank.textContent = String(index + 1);
+          nickname.textContent = entry.nickname;
+          cash.textContent = money(entry.cashBalance);
+          total.textContent = money(entry.totalCapital);
+          row.append(rank, nickname, cash, total);
+          els.podiumRows.appendChild(row);
+        });
+      }
     }
 
     const latest = entries.map((entry) => entry.updatedAt)
-      .filter(Boolean)
+      .filter((value) => value && typeof value.toMillis === "function")
       .sort((a, b) => b.toMillis() - a.toMillis())[0] || null;
     els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(latest);
     els.podiumUpdatedAt.dateTime = latest && typeof latest.toDate === "function" ? latest.toDate().toISOString() : "";
-    els.podiumStatus.textContent = "";
+    els.podiumStatus.textContent = blueMarketReady ? "" : "Курс Blue тимчасово недоступний: Blue враховано за мінімальним курсом.";
   }
 
   function startPodiumSync(db, expectedUID) {
@@ -824,7 +862,7 @@
         button.addEventListener("click", () => purchaseExtraCell(index));
       } else {
         button.className = "slot" + (gpu ? " occupied" + (gpu.currency === "blue" ? " blue-gpu-slot" : "") : "");
-        button.setAttribute("aria-label", gpu ? gpu.name + ", майнить " + currencyLabel(gpu.currency) + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
+        button.setAttribute("aria-label", gpu ? gpu.name + ", видобуває " + currencyLabel(gpu.currency) + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
         if (gpu) {
           button.appendChild(createGpuIcon(gpu, "farm-gpu-icon"));
           button.title = gpu.name + " — видобуває " + currencyLabel(gpu.currency) + "; натисни для дій";
@@ -1071,10 +1109,28 @@
     showToast(installedName + " встановлено на ферму.");
   }
 
+  const CRYP_DISPLAY_DIGITS = 3;
+  const BLUE_DISPLAY_DIGITS = 6;
+
+  // Accepts "1.5", "1,5" and numbers copied from the UI such as "1 234,5".
+  function parseAmount(raw) {
+    const text = String(raw ?? "").replace(/[\s\u00a0\u202f]/g, "").replace(",", ".");
+    return text === "" ? NaN : Number(text);
+  }
+
+  // Balances are displayed rounded, so the value a player types may exceed the real balance by up to
+  // half of the last displayed digit. Allow that and sell no more than the actual balance.
+  function resolveSellAmount(amount, balance, digits) {
+    if (!Number.isFinite(amount) || amount <= 0) return { status: "empty", amount: 0 };
+    const tolerance = 0.5 * Math.pow(10, -digits) + 1e-9;
+    if (amount > balance + tolerance) return { status: "insufficient", amount: 0 };
+    return { status: "ok", amount: Math.min(amount, balance) };
+  }
+
   function updateSellPreview() {
     if (!els.sellAmount || !els.sellPreview) return;
-    const amount = Math.max(0, Number(els.sellAmount.value) || 0);
-    els.sellPreview.textContent = money(marketReady ? Math.min(amount, state.cryp) * marketState.price : 0);
+    const result = resolveSellAmount(parseAmount(els.sellAmount.value), state.cryp, CRYP_DISPLAY_DIGITS);
+    els.sellPreview.textContent = money(marketReady ? result.amount * marketState.price : 0);
   }
 
   function sellCRYP() {
@@ -1082,15 +1138,16 @@
       showToast("Спільний курс ще не завантажився. Спробуй трохи пізніше.");
       return;
     }
-    const amount = Number(els.sellAmount.value);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const result = resolveSellAmount(parseAmount(els.sellAmount.value), state.cryp, CRYP_DISPLAY_DIGITS);
+    if (result.status === "empty") {
       showToast("Введи кількість CRYP, яку хочеш продати.");
       return;
     }
-    if (amount > state.cryp + 1e-9) {
+    if (result.status === "insufficient") {
       showToast("У тебе недостатньо CRYP для цієї операції.");
       return;
     }
+    const amount = result.amount;
     const proceeds = amount * marketState.price;
     state.cryp = Math.max(0, state.cryp - amount);
     state.cash += proceeds;
@@ -1102,16 +1159,12 @@
 
   function updateBlueSellPreview() {
     if (!els.blueSellAmount || !els.blueSellPreview) return;
-    const amount = Number(String(els.blueSellAmount.value).trim().replace(",", "."));
-    if (!Number.isFinite(amount) || amount <= 0) {
-      els.blueSellPreview.textContent = money(0);
-      return;
-    }
-    if (amount > state.blue) {
+    const result = resolveSellAmount(parseAmount(els.blueSellAmount.value), state.blue, BLUE_DISPLAY_DIGITS);
+    if (result.status === "insufficient") {
       els.blueSellPreview.textContent = "Недостатньо Blue";
       return;
     }
-    els.blueSellPreview.textContent = money(blueMarketReady ? amount * blueMarketState.price : 0);
+    els.blueSellPreview.textContent = money(blueMarketReady ? result.amount * blueMarketState.price : 0);
   }
 
   function sellBlue() {
@@ -1119,22 +1172,23 @@
       showToast("Спільний курс Blue ще не завантажився. Спробуй трохи пізніше.");
       return;
     }
-    const amount = Number(String(els.blueSellAmount.value).trim().replace(",", "."));
-    if (!Number.isFinite(amount) || amount <= 0) {
+    const result = resolveSellAmount(parseAmount(els.blueSellAmount.value), state.blue, BLUE_DISPLAY_DIGITS);
+    if (result.status === "empty") {
       showToast("Введи кількість Blue, яку хочеш продати.");
       return;
     }
-    if (amount > state.blue) {
+    if (result.status === "insufficient") {
       showToast("У тебе недостатньо Blue для цієї операції.");
       return;
     }
+    const amount = result.amount;
     const proceeds = amount * blueMarketState.price;
     state.blue = Math.max(0, state.blue - amount);
     state.cash += proceeds;
     els.blueSellAmount.value = "";
     render();
     save();
-    showToast("Продано " + number(amount, 6) + " Blue за " + money(proceeds) + ".");
+    showToast("Продано " + number(amount, BLUE_DISPLAY_DIGITS) + " Blue за " + money(proceeds) + ".");
   }
 
   function showPage(pageName) {
@@ -1169,7 +1223,7 @@
     updatePrice(now);
     updateBluePrice(now);
     renderStats();
-    if (Math.floor(now / 5000) !== Math.floor((now - 1000) / 5000)) save();
+    if (Math.floor(now / 5000) !== Math.floor((now - 1000) / 5000)) save({ periodic: true });
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -1185,6 +1239,7 @@
       }
       lastVisibleTick = now;
       updatePrice(now);
+      updateBluePrice(now);
       render();
       save();
     }
@@ -1416,6 +1471,8 @@
       try {
         currentUserUID = user.uid;
         SAVE_KEY = "cryp-mining-v01-" + user.uid;
+        lastCloudSaveAt = 0;
+        lastCloudSaveSignature = "";
         state = loadState();
 
         const db = firebase.db;
@@ -1425,14 +1482,16 @@
             const snapshot = await playerRef.get();
             if (snapshot.exists) {
               const remote = snapshot.data();
-              if (remote && Array.isArray(remote.slots)) {
+              // The newer save wins. A local save that never reached the cloud (offline, failed write)
+              // must not be overwritten by an older cloud copy. Saves without a timestamp count as oldest.
+              const localSavedAt = Number(state.savedAt) || 0;
+              const remoteSavedAt = remote && Number(remote.savedAt) || 0;
+              if (remote && Array.isArray(remote.slots) && !(localSavedAt > remoteSavedAt)) {
                 state = normalizeSavedState(remote);
                 delete state.price;
                 delete state.lastPriceAt;
                 delete state.trendDirection;
                 delete state.trendTicksLeft;
-                // Update untouched older cloud saves to the current starting balance.
-                if ((remote.cash === 300 || remote.cash === 1000) && remote.cryp === 0 && state.slots.every((gpu) => !gpu) && state.inventory.length === 0) state.cash = 490;
                 localStorage.setItem(SAVE_KEY, JSON.stringify(state));
               }
             } else {
@@ -1450,8 +1509,8 @@
           }
         }
 
-        await startMarketSync(db, user.uid);
-        await startBlueMarketSync(db, user.uid);
+        // Independent shared rates start in parallel; a Blue failure never blocks CRYP or the game.
+        await Promise.all([startMarketSync(db, user.uid), startBlueMarketSync(db, user.uid)]);
         startPodiumSync(db, user.uid);
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {

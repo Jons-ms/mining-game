@@ -2,40 +2,51 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Validates a shared exchange-rate document: exact fields, price inside the approved range,
+    // sane trend values, and a lastPriceAt that matches the server clock. The time check stops a device
+    // with a wrong clock from writing a far-future timestamp that would freeze the rate for everyone.
+    function validRateData(minPrice, maxPrice) {
+      let data = request.resource.data;
+      return request.auth != null
+        && data.keys().hasAll(['price', 'trendDirection', 'trendTicksLeft', 'lastPriceAt', 'updatedAt'])
+        && data.keys().hasOnly(['price', 'trendDirection', 'trendTicksLeft', 'lastPriceAt', 'updatedAt'])
+        && data.price is number
+        && data.price >= minPrice
+        && data.price <= maxPrice
+        && data.trendDirection is int
+        && data.trendDirection in [-1, 0, 1]
+        && data.trendTicksLeft is int
+        && data.trendTicksLeft >= 0
+        && data.trendTicksLeft <= 10
+        && data.lastPriceAt is int
+        && data.lastPriceAt >= request.time.toMillis() - 60000
+        && data.lastPriceAt <= request.time.toMillis() + 60000
+        && data.updatedAt is timestamp;
+    }
+
     // Each signed-in player can access only their own private save.
     match /players/{playerId} {
       allow read, write: if request.auth != null && request.auth.uid == playerId;
     }
 
-    // The existing browser game advances this shared rate using Firestore transactions.
+    // CRYP shared rate: 0.25-7 UAH, starts at 1 UAH.
     match /market/exchangeRate {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow create: if validRateData(0.25, 7)
+        && request.resource.data.price == 1
+        && request.resource.data.trendDirection == 0
+        && request.resource.data.trendTicksLeft == 0;
+      allow update: if validRateData(0.25, 7);
     }
 
-    // Blue has an independent shared rate document; enforce its approved bounds in Firestore.
+    // Blue has an independent shared rate document: 4.25-13.75 UAH, starts at 4.25 UAH.
     match /market/blueExchangeRate {
-      function validRateData() {
-        return request.auth != null
-          && request.resource.data.keys().hasAll(['price', 'trendDirection', 'trendTicksLeft', 'lastPriceAt', 'updatedAt'])
-          && request.resource.data.keys().hasOnly(['price', 'trendDirection', 'trendTicksLeft', 'lastPriceAt', 'updatedAt'])
-          && request.resource.data.price is number
-          && request.resource.data.price >= 4.25
-          && request.resource.data.price <= 13.75
-          && request.resource.data.trendDirection is int
-          && (request.resource.data.trendDirection == -1 || request.resource.data.trendDirection == 0 || request.resource.data.trendDirection == 1)
-          && request.resource.data.trendTicksLeft is int
-          && request.resource.data.trendTicksLeft >= 0
-          && request.resource.data.trendTicksLeft <= 10
-          && request.resource.data.lastPriceAt is int
-          && request.resource.data.updatedAt is timestamp;
-      }
-
       allow read: if request.auth != null;
-      allow create: if validRateData()
+      allow create: if validRateData(4.25, 13.75)
         && request.resource.data.price == 4.25
         && request.resource.data.trendDirection == 0
         && request.resource.data.trendTicksLeft == 0;
-      allow update: if validRateData();
+      allow update: if validRateData(4.25, 13.75);
     }
 
     // Players publish only their own public ranking row; private saves remain private.
@@ -45,4 +56,3 @@ service cloud.firestore {
     }
   }
 }
-

@@ -130,6 +130,11 @@ function createGame() {
       renderShop,
       updateBlueSellPreview,
       sellBlue,
+      sellCRYP,
+      gameNow: () => Date.now(),
+      updateSellPreview,
+      normalizedMarketState,
+      normalizedBlueMarketState,
       clampBluePrice,
       nextBluePriceState,
       startBlueMarketSync,
@@ -418,3 +423,150 @@ test('Blue balances, rates and exchange controls have unique page elements', () 
   ]) assert.ok(ids.includes(id), `missing Blue UI element: ${id}`);
 });
 
+test('Podium still ranks players when the Blue rate is unavailable', () => {
+  const { api, elements } = createGame();
+  api.setCrypMarket(3);
+  api.setBlueMarket(10, false);
+  api.setPodiumProfiles([{ nickname: 'Miner', cashBalance: 100, crypBalance: 2, blueBalance: 1 }]);
+  api.renderPodium();
+
+  const rows = elements.get('podiumRows').children;
+  assert.equal(rows.length, 1);
+  // Blue falls back to its minimum rate (4.25) instead of hiding the ranking.
+  assert.equal(rows[0].children[3].textContent, '110,25 ₴');
+  assert.match(elements.get('podiumStatus').textContent, /Blue/);
+});
+
+test('Podium table is not rebuilt every second when nothing changed', () => {
+  const { api, elements } = createGame();
+  api.setCrypMarket(3);
+  api.setBlueMarket(10);
+  api.setPodiumProfiles([{ nickname: 'Miner', cashBalance: 100, crypBalance: 2, blueBalance: 0.5 }]);
+  api.renderPodium();
+  const firstRow = elements.get('podiumRows').children[0];
+  api.renderPodium();
+  assert.equal(elements.get('podiumRows').children[0], firstRow, 'unchanged ranking keeps the same DOM rows');
+
+  api.setCrypMarket(4);
+  api.renderPodium();
+  assert.notEqual(elements.get('podiumRows').children[0], firstRow, 'a changed rate rebuilds the rows');
+  assert.equal(elements.get('podiumRows').children[0].children[0].textContent, '1');
+});
+
+test('a far-future lastPriceAt from a wrong device clock cannot freeze either shared rate', () => {
+  const { api } = createGame();
+  const now = api.gameNow();
+  const day = 24 * 60 * 60 * 1000;
+  for (const normalize of [api.normalizedMarketState, api.normalizedBlueMarketState]) {
+    assert.equal(normalize({ price: 5, lastPriceAt: now + day }).lastPriceAt, 0, 'poisoned timestamp counts as stale');
+    assert.equal(normalize({ price: 5, lastPriceAt: now + 30_000 }).lastPriceAt, now + 30_000, 'small clock skew is tolerated');
+    assert.equal(normalize({ price: 5, lastPriceAt: now - 10_000 }).lastPriceAt, now - 10_000);
+  }
+});
+
+test('saves are not reset to 490 UAH by the old starter-balance migration', () => {
+  const { api } = createGame();
+  const state = api.newState();
+  state.cash = 1000;
+  state.blue = 25;
+  api.setState(state);
+  api.setSaveKey('cryp-mining-v01-migration-test');
+  api.save();
+  assert.equal(api.loadState().cash, 1000);
+
+  state.blue = 0;
+  state.cash = 300;
+  api.save();
+  assert.equal(api.loadState().cash, 300);
+});
+
+test('selling accepts the rounded balance shown on screen and numbers copied from the UI', () => {
+  const { api, elements } = createGame();
+  api.setRenderNoop();
+  const state = api.newState();
+  state.blue = 1.2345678; // displayed as 1,234568
+  state.cryp = 5.0004; // displayed as 5,000
+  api.setState(state);
+  api.setBlueMarket(10);
+  api.setCrypMarket(2);
+
+  elements.get('blueSellAmount').value = '1,234568';
+  api.sellBlue();
+  assert.equal(state.blue, 0, 'the displayed Blue balance can be sold in full');
+  assert.equal(state.cash, 490 + 1.2345678 * 10, 'proceeds use the real balance, never more');
+
+  elements.get('sellAmount').value = '5.0005';
+  api.sellCRYP();
+  assert.equal(state.cryp, 0, 'the displayed CRYP balance can be sold in full');
+
+  state.blue = 1234.5;
+  elements.get('blueSellAmount').value = '1 234,5';
+  api.sellBlue();
+  assert.equal(state.blue, 0, 'thousands separators from the UI are accepted');
+
+  state.cryp = 5;
+  elements.get('sellAmount').value = '5.01';
+  api.sellCRYP();
+  assert.equal(state.cryp, 5, 'a real oversell is still rejected');
+});
+
+test('periodic cloud saves are throttled and skipped when nothing changed, while actions save promptly', async () => {
+  const { api } = createGame();
+  const { database, documents } = makeDatabase();
+  const state = api.newState();
+  api.setState(state);
+  api.setUID('quota-user');
+  api.setSaveKey('cryp-mining-v01-quota-user');
+  api.setCloudSaveReady(true);
+  api.setDatabase(database);
+  const stored = () => documents['players/quota-user'];
+
+  api.save({ periodic: true });
+  await api.runPendingTimers();
+  const first = stored();
+  assert.ok(first, 'the first periodic save reaches the cloud');
+
+  api.advanceTime(5000);
+  state.cryp += 1;
+  api.save({ periodic: true });
+  await api.runPendingTimers();
+  assert.equal(stored(), first, 'periodic saves inside 30 seconds are skipped');
+
+  api.save();
+  await api.runPendingTimers();
+  const afterAction = stored();
+  assert.notEqual(afterAction, first, 'a player action is written to the cloud promptly');
+
+  api.advanceTime(31_000);
+  api.save({ periodic: true });
+  await api.runPendingTimers();
+  assert.equal(stored(), afterAction, 'an unchanged state is not rewritten even after the interval');
+
+  state.cryp += 1;
+  api.save({ periodic: true });
+  await api.runPendingTimers();
+  assert.notEqual(stored(), afterAction, 'a changed state is written once the interval has passed');
+  assert.ok(Number(stored().savedAt) > 0, 'cloud saves carry a client timestamp used to pick the newer save at login');
+});
+
+test('farm slot labels use Ukrainian wording', () => {
+  const { api, elements } = createGame();
+  api.setRenderNoop();
+  const state = api.newState();
+  state.slots[0] = { id: 'blue-rtx4060', name: 'RTX 4060', rate: 0.015, currency: 'blue', cost: 2400 };
+  api.setState(state);
+  api.renderFarm();
+  const label = elements.get('farmGrid').children[0].attributes['aria-label'];
+  assert.match(label, /видобуває Blue/);
+  assert.doesNotMatch(label, /майнить/);
+});
+
+test('Firestore rules validate both shared rates, including the server-time check', () => {
+  const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
+  assert.match(rules, /match \/market\/exchangeRate[\s\S]*?validRateData\(0\.25, 7\)/);
+  assert.match(rules, /match \/market\/blueExchangeRate[\s\S]*?validRateData\(4\.25, 13\.75\)/);
+  assert.match(rules, /request\.time\.toMillis\(\) - 60000/);
+  assert.match(rules, /request\.time\.toMillis\(\) \+ 60000/);
+  assert.match(rules, /match \/podiumPlayers\/\{playerId\}/);
+  assert.match(rules, /match \/players\/\{playerId\}/);
+});
