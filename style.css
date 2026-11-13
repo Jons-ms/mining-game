@@ -314,3 +314,20 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .slot.locked .locked-price{color:var(--accent);font-size:11px;font-weight:800}
 .field-shop-icon{display:grid;place-items:center;flex:0 0 48px;width:48px;height:42px;border:1px solid rgba(90,236,162,.36);border-radius:9px;background:radial-gradient(ellipse at 50% 35%,rgba(57,229,152,.24),rgba(12,42,31,.96));font-size:24px}
 @media(max-width:430px){.farm-switcher{gap:6px;padding:8px 6px}.farm-switcher .secondary-button{padding:8px 7px;font-size:11px}.farm-switcher span{font-size:11px}}
+
+/* Blue equipment and balances use a cool blue accent. */
+.blue-stat-card { border-color: #267eaa; background: linear-gradient(145deg, rgba(20, 61, 86, .72), rgba(15, 22, 32, .92)); }
+.blue-stat-card strong { color: #8fe0ff; }
+.shop-currency-group { display: grid; gap: 10px; }
+.shop-currency-group + .shop-currency-group { margin-top: 18px; }
+.shop-currency-heading { margin: 8px 0 2px; color: var(--text); font-size: 15px; }
+.blue-shop-heading { color: #8fe0ff; }
+.blue-shop-group .shop-item { border-color: #246b91; background: linear-gradient(145deg, rgba(14, 48, 73, .78), rgba(13, 25, 38, .96)); }
+.blue-shop-group .shop-item .gpu-icon { border-color: rgba(89, 196, 244, .48); background: radial-gradient(ellipse at 50% 35%, rgba(65, 177, 226, .28), rgba(9, 35, 55, .96)); }
+.slot.occupied.blue-gpu-slot { border-color: #368bb5; background: radial-gradient(ellipse at 50% 0%, rgba(75, 190, 242, .2), transparent 72%), linear-gradient(160deg, #12374e, #101e2b); box-shadow: inset 0 0 18px rgba(66, 178, 231, .12); }
+.blue-exchange-block { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+.blue-exchange-block > h3 { margin: 0 0 12px; color: #8fe0ff; }
+.blue-rate-card { border-color: #267eaa; background: linear-gradient(135deg, rgba(18, 60, 86, .72), rgba(15, 22, 32, .88)); }
+.blue-balance-card strong { color: #8fe0ff; }
+.blue-profile-stat { border-color: rgba(55, 139, 184, .5); }
+

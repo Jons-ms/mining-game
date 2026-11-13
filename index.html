@@ -73,6 +73,9 @@
       <article class="stat-card"><span>Гроші</span><strong id="cashValue">490 ₴</strong><small>на рахунку</small></article>
       <article class="stat-card"><span>Криптовалюта</span><strong id="crypValue">0.000 CRYP</strong><small>видобуто</small></article>
       <article class="stat-card"><span>Швидкість майнінгу</span><strong id="rateValue">0.000 CRYP/с</strong><small id="gpuCount">0 відеокарт</small></article>
+      <article class="stat-card blue-stat-card"><span>Криптовалюта</span><strong id="blueValue">0.000000 Blue</strong><small>видобуто</small></article>
+      <article class="stat-card blue-stat-card"><span>Швидкість майнінгу</span><strong id="blueRateValue">0.000 Blue/с</strong><small>лише з карт Blue</small></article>
+      <article class="stat-card blue-stat-card"><span>Курс Blue</span><strong id="bluePriceValue">4,25 ₴</strong><small>за 1 Blue · змінюється</small></article>
       <article class="stat-card"><span>Курс CRYP</span><strong id="priceValue">1,00 ₴</strong><small>за 1 CRYP · змінюється</small></article>
     </section>
 
@@ -103,6 +106,7 @@
     <section class="page-section" id="page-exchange" hidden>
       <section class="panel">
         <div class="section-heading"><h2>Криптовалютна біржа</h2></div>
+        <div class="exchange-currency-block cryp-exchange-block">
         <div class="exchange-balance-card">
           <span>Твій баланс криптовалюти</span>
           <strong id="exchangeBalance">0.000 CRYP</strong>
@@ -120,6 +124,29 @@
           <div class="exchange-actions">
             <button class="secondary-button" id="sellAllButton" type="button">Продати все</button>
             <button class="primary-button" id="sellButton" type="button">Продати CRYP</button>
+          </div>
+        </div>
+        </div>
+        <div class="exchange-currency-block blue-exchange-block">
+          <h3>Blue</h3>
+          <div class="exchange-balance-card blue-balance-card">
+            <span>Твій баланс Blue</span>
+            <strong id="blueExchangeBalance">0.000000 Blue</strong>
+          </div>
+          <div class="exchange-rate-card blue-rate-card">
+            <span>Поточний курс Blue</span>
+            <strong id="blueExchangePrice">4,25 ₴</strong>
+            <small>за 1 Blue</small>
+          </div>
+          <p class="small-note" id="blueMarketStatus" role="status" aria-live="polite">Підключаємо спільний курс Blue…</p>
+          <div class="exchange-form">
+            <label for="blueSellAmount">Скільки Blue продати?</label>
+            <input id="blueSellAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="Наприклад, 1.5">
+            <div class="exchange-preview">Отримаєш: <strong id="blueSellPreview">0,00 ₴</strong></div>
+            <div class="exchange-actions">
+              <button class="secondary-button" id="blueSellAllButton" type="button">Продати все Blue</button>
+              <button class="primary-button" id="blueSellButton" type="button">Продати Blue</button>
+            </div>
           </div>
         </div>
       </section>
@@ -163,6 +190,9 @@
           <article class="profile-stat"><span>Швидкість майнінгу</span><strong id="infoRate">0.000 CRYP/с</strong></article>
           <article class="profile-stat"><span>Відеокарт в інвентарі</span><strong id="infoInventory">0</strong></article>
           <article class="profile-stat"><span>Поточний курс CRYP</span><strong id="infoPrice">1,00 ₴</strong></article>
+          <article class="profile-stat blue-profile-stat"><span>Баланс Blue</span><strong id="infoBlue">0.000000 Blue</strong></article>
+          <article class="profile-stat blue-profile-stat"><span>Швидкість майнінгу Blue</span><strong id="infoBlueRate">0.000 Blue/с</strong></article>
+          <article class="profile-stat blue-profile-stat"><span>Курс Blue</span><strong id="infoBluePrice">4,25 ₴</strong></article>
         </div>
       </section>
     </section>
@@ -195,3 +225,4 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </body>
 </html>
+

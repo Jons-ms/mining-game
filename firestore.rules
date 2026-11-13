@@ -12,6 +12,32 @@ service cloud.firestore {
       allow read, write: if request.auth != null;
     }
 
+    // Blue has an independent shared rate document; enforce its approved bounds in Firestore.
+    match /market/blueExchangeRate {
+      function validRateData() {
+        return request.auth != null
+          && request.resource.data.keys().hasAll(['price', 'trendDirection', 'trendTicksLeft', 'lastPriceAt', 'updatedAt'])
+          && request.resource.data.keys().hasOnly(['price', 'trendDirection', 'trendTicksLeft', 'lastPriceAt', 'updatedAt'])
+          && request.resource.data.price is number
+          && request.resource.data.price >= 4.25
+          && request.resource.data.price <= 13.75
+          && request.resource.data.trendDirection is int
+          && (request.resource.data.trendDirection == -1 || request.resource.data.trendDirection == 0 || request.resource.data.trendDirection == 1)
+          && request.resource.data.trendTicksLeft is int
+          && request.resource.data.trendTicksLeft >= 0
+          && request.resource.data.trendTicksLeft <= 10
+          && request.resource.data.lastPriceAt is int
+          && request.resource.data.updatedAt is timestamp;
+      }
+
+      allow read: if request.auth != null;
+      allow create: if validRateData()
+        && request.resource.data.price == 4.25
+        && request.resource.data.trendDirection == 0
+        && request.resource.data.trendTicksLeft == 0;
+      allow update: if validRateData();
+    }
+
     // Players publish only their own public ranking row; private saves remain private.
     match /podiumPlayers/{playerId} {
       allow read: if request.auth != null;
@@ -19,3 +45,4 @@ service cloud.firestore {
     }
   }
 }
+

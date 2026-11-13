@@ -14,9 +14,12 @@
   const MAX_PRICE = 7;
 
   const GPU_TYPES = [
-    { id: "starter", name: "Starter GPU", icon: "▰", price: 250, rate: 0.02 },
-    { id: "rtx3060", name: "RTX 3060", icon: "▰", price: 600, rate: 0.06 },
-    { id: "rtx4090", name: "RTX 4090", icon: "▰", price: 1200, rate: 0.15 }
+    { id: "starter", name: "Starter GPU", icon: "▰", price: 250, rate: 0.02, currency: "cryp" },
+    { id: "rtx3060", name: "RTX 3060", icon: "▰", price: 600, rate: 0.06, currency: "cryp" },
+    { id: "rtx4090", name: "RTX 4090", icon: "▰", price: 1200, rate: 0.15, currency: "cryp" },
+    { id: "blue-rtx4060", name: "RTX 4060", icon: "▰", price: 2400, rate: 0.015, currency: "blue" },
+    { id: "blue-rtx3070", name: "RTX 3070", icon: "▰", price: 10000, rate: 0.06, currency: "blue" },
+    { id: "blue-rtx4070", name: "RTX 4070", icon: "▰", price: 15000, rate: 0.08, currency: "blue" }
   ];
 
   // Shared top-down pixel-art card illustrations for the farm, shop, and inventory.
@@ -38,6 +41,24 @@
       case: "#302b24", face: "#49402f", shadow: "#191916",
       trim: "#a17b3c", fanRing: "#1e1b17", fanFace: "#3a3124",
       blade: "#94713b", accent: "#f0c75b", metal: "#d0b77d"
+    },
+    "blue-rtx4060": {
+      label: "BLUE I", centers: [24, 48], scale: 0.78,
+      case: "#153750", face: "#1b5273", shadow: "#0c2435",
+      trim: "#3488b6", fanRing: "#102f45", fanFace: "#1e5f82",
+      blade: "#54b9e8", accent: "#9be5ff", metal: "#8bc9e0"
+    },
+    "blue-rtx3070": {
+      label: "BLUE II", centers: [18, 36, 54], scale: 0.62,
+      case: "#123d59", face: "#195d7d", shadow: "#0a263b",
+      trim: "#2a91c4", fanRing: "#0d304a", fanFace: "#1b6285",
+      blade: "#5ac7f3", accent: "#b0efff", metal: "#88cee8"
+    },
+    "blue-rtx4070": {
+      label: "BLUE III", centers: [18, 36, 54], scale: 0.74,
+      case: "#173d69", face: "#235b91", shadow: "#0b2445",
+      trim: "#3c9ce0", fanRing: "#102d51", fanFace: "#24629b",
+      blade: "#69c5ff", accent: "#c7f2ff", metal: "#9acbec"
     }
   };
   const SVG_NS = "http://www.w3.org/2000/svg";
@@ -125,6 +146,7 @@
   const $ = (id) => document.getElementById(id);
   const els = {
     cash: $("cashValue"), cryp: $("crypValue"), rate: $("rateValue"),
+    blue: $("blueValue"), blueRate: $("blueRateValue"), bluePrice: $("bluePriceValue"),
     gpuCount: $("gpuCount"), price: $("priceValue"), grid: $("farmGrid"),
     shop: $("shopList"), inventory: $("inventoryList"),
     inventoryHint: $("inventoryHint"), inventoryModal: $("inventoryModal"),
@@ -132,6 +154,8 @@
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
     sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
     exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus"),
+    blueSellAmount: $("blueSellAmount"), blueSellPreview: $("blueSellPreview"),
+    blueExchangePrice: $("blueExchangePrice"), blueExchangeBalance: $("blueExchangeBalance"), blueMarketStatus: $("blueMarketStatus"),
     podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt"),
     farmSwitcher: $("farmSwitcher"), farmFieldLabel: $("farmFieldLabel"),
     farmSwipeHint: $("farmSwipeHint"), farmPrevious: $("farmPrevious"), farmNext: $("farmNext")
@@ -142,6 +166,7 @@
       playerName: "Гравець 1",
       cash: 490,
       cryp: 0,
+      blue: 0,
       slots: Array(SLOT_COUNT).fill(null),
       inventory: [],
       hasExtraField: false,
@@ -153,14 +178,24 @@
   function normalizeSavedState(saved) {
     const normalized = { ...newState(), ...saved };
     const costFor = (gpu) => Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
+    const normalizeGPU = (gpu) => {
+      const knownType = GPU_TYPES.find((type) => type.id === gpu.id);
+      return {
+        ...gpu,
+        currency: knownType?.currency || (gpu.currency === "blue" ? "blue" : "cryp"),
+        cost: costFor(gpu)
+      };
+    };
+    const blueBalance = Number(normalized.blue);
+    normalized.blue = Number.isFinite(blueBalance) ? Math.max(0, blueBalance) : 0;
     normalized.slots = Array.from({ length: SLOT_COUNT }, (_, index) => saved.slots[index] || null)
-      .map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
-    normalized.inventory = Array.isArray(saved.inventory) ? saved.inventory.map((gpu) => ({ ...gpu, cost: costFor(gpu) })) : [];
+      .map((gpu) => gpu ? normalizeGPU(gpu) : null);
+    normalized.inventory = Array.isArray(saved.inventory) ? saved.inventory.map(normalizeGPU) : [];
     normalized.hasExtraField = saved.hasExtraField === true;
     normalized.extraSlots = Array.from({ length: SLOT_COUNT }, (_, index) => saved.extraSlots?.[index] || null);
     const savedUnlocks = Array.isArray(saved.extraUnlockedSlots) && saved.extraUnlockedSlots.length ? saved.extraUnlockedSlots : null;
     normalized.extraUnlockedSlots = Array.from({ length: SLOT_COUNT }, (_, index) => savedUnlocks ? savedUnlocks[index] === true : index < INITIAL_EXTRA_UNLOCKED);
-    normalized.extraSlots = normalized.extraSlots.map((gpu) => gpu ? { ...gpu, cost: costFor(gpu) } : null);
+    normalized.extraSlots = normalized.extraSlots.map((gpu) => gpu ? normalizeGPU(gpu) : null);
     return normalized;
   }
 
@@ -175,6 +210,20 @@
   let marketUnsubscribe = null;
   let marketReady = false;
   let marketUpdateInProgress = false;
+  const BLUE_MIN_PRICE = 4.25;
+  const BLUE_MAX_PRICE = 13.75;
+  const BLUE_PRICE_UPDATE_INTERVAL = 5000;
+  const INITIAL_BLUE_MARKET_STATE = {
+    price: BLUE_MIN_PRICE,
+    trendDirection: 0,
+    trendTicksLeft: 0,
+    lastPriceAt: 0
+  };
+  let blueMarketState = { ...INITIAL_BLUE_MARKET_STATE };
+  let blueMarketRef = null;
+  let blueMarketUnsubscribe = null;
+  let blueMarketReady = false;
+  let blueMarketUpdateInProgress = false;
   let podiumUnsubscribe = null;
   let podiumPublishTimer = null;
   let podiumProfiles = [];
@@ -219,12 +268,16 @@
     return Number(value || 0).toLocaleString("uk-UA", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   }
 
+  function currencyLabel(currency) {
+    return currency === "blue" ? "Blue" : "CRYP";
+  }
+
   function allGPUs() {
     return state.slots.concat(state.hasExtraField ? state.extraSlots : []).filter(Boolean);
   }
 
-  function totalRate() {
-    return allGPUs().reduce((sum, gpu) => sum + (gpu.rate || 0), 0);
+  function totalRate(currency = "cryp") {
+    return allGPUs().reduce((sum, gpu) => sum + (gpu.currency === currency ? (gpu.rate || 0) : 0), 0);
   }
 
   function save() {
@@ -275,7 +328,8 @@
 
   function addMining(seconds) {
     if (seconds <= 0 || document.hidden) return;
-    state.cryp += totalRate() * seconds;
+    state.cryp += totalRate("cryp") * seconds;
+    state.blue += totalRate("blue") * seconds;
   }
 
   // Shared Firestore market: one transaction advances the exchange rate for every player.
@@ -437,10 +491,149 @@
     });
   }
 
+  function clampBluePrice(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return BLUE_MIN_PRICE;
+    return Math.max(BLUE_MIN_PRICE, Math.min(BLUE_MAX_PRICE, parsed));
+  }
+
+  function nextBluePriceState(previous) {
+    const currentPrice = clampBluePrice(previous.price);
+    const position = (currentPrice - BLUE_MIN_PRICE) / (BLUE_MAX_PRICE - BLUE_MIN_PRICE);
+    let direction = Number(previous.trendDirection);
+    let ticksLeft = Number(previous.trendTicksLeft);
+    const upwardChance = Math.max(0.18, Math.min(0.82, 0.62 - position * 0.24));
+
+    if (currentPrice >= BLUE_MAX_PRICE) {
+      direction = -1;
+      ticksLeft = 1;
+    } else if (currentPrice <= BLUE_MIN_PRICE) {
+      direction = 1;
+      ticksLeft = 1;
+    }
+
+    if ((direction !== -1 && direction !== 1) || !Number.isFinite(ticksLeft) || ticksLeft <= 0) {
+      direction = Math.random() < upwardChance ? 1 : -1;
+      ticksLeft = 4 + Math.floor(Math.random() * 7);
+    }
+
+    const change = 0.0125 + Math.random() * 0.0175;
+    const factor = direction === 1 ? 1 + change : 1 - change;
+    const price = clampBluePrice(currentPrice * factor);
+    ticksLeft -= 1;
+    if (price >= BLUE_MAX_PRICE || price <= BLUE_MIN_PRICE) ticksLeft = 0;
+    return { price: Number(price.toFixed(4)), trendDirection: direction, trendTicksLeft: ticksLeft };
+  }
+
+  function normalizedBlueMarketState(data) {
+    const parsedLastAt = Number(data.lastPriceAt);
+    const direction = Number(data.trendDirection);
+    const ticksLeft = Number(data.trendTicksLeft);
+    return {
+      price: clampBluePrice(data.price),
+      trendDirection: direction === -1 || direction === 1 ? direction : 0,
+      trendTicksLeft: Number.isFinite(ticksLeft) ? Math.max(0, Math.floor(ticksLeft)) : 0,
+      lastPriceAt: Number.isFinite(parsedLastAt) && parsedLastAt > 0 ? parsedLastAt : Date.now()
+    };
+  }
+
+  function stopBlueMarketSync() {
+    if (blueMarketUnsubscribe) blueMarketUnsubscribe();
+    blueMarketUnsubscribe = null;
+    blueMarketRef = null;
+    blueMarketReady = false;
+    blueMarketUpdateInProgress = false;
+    blueMarketState = { ...INITIAL_BLUE_MARKET_STATE };
+  }
+
+  async function startBlueMarketSync(db, expectedUID) {
+    stopBlueMarketSync();
+    if (!db) {
+      if (els.blueMarketStatus) els.blueMarketStatus.textContent = "Спільний курс Blue недоступний: Firestore не підключився.";
+      return false;
+    }
+
+    const ref = db.collection("market").doc("blueExchangeRate");
+    const initialMarket = { ...INITIAL_BLUE_MARKET_STATE, lastPriceAt: Date.now() };
+    try {
+      await db.runTransaction(async (transaction) => {
+        const snapshot = await transaction.get(ref);
+        if (!snapshot.exists) {
+          transaction.set(ref, {
+            ...initialMarket,
+            updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+          });
+        }
+      });
+
+      if (expectedUID !== currentUserUID) return false;
+
+      blueMarketRef = ref;
+      blueMarketUnsubscribe = ref.onSnapshot((snapshot) => {
+        if (!snapshot.exists) return;
+        blueMarketState = normalizedBlueMarketState(snapshot.data());
+        blueMarketReady = true;
+        if (els.blueMarketStatus) els.blueMarketStatus.textContent = "Спільний курс Blue синхронізується через Firestore.";
+        renderStats();
+      }, (error) => {
+        blueMarketReady = false;
+        console.error("Не вдалося синхронізувати спільний курс Blue:", error);
+        if (els.blueMarketStatus) els.blueMarketStatus.textContent = "Курс Blue недоступний — перевір правила Firestore.";
+      });
+      return true;
+    } catch (error) {
+      console.error("Не вдалося підключити спільний курс Blue:", error);
+      if (els.blueMarketStatus) els.blueMarketStatus.textContent = "Курс Blue недоступний — перевір правила Firestore.";
+      return false;
+    }
+  }
+
+  function updateBluePrice(now = Date.now()) {
+    if (!blueMarketReady || !blueMarketRef || blueMarketUpdateInProgress) return;
+    if (now - blueMarketState.lastPriceAt < BLUE_PRICE_UPDATE_INTERVAL) return;
+
+    const ref = blueMarketRef;
+    const uid = currentUserUID;
+    blueMarketUpdateInProgress = true;
+    window.crypFirebase.db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists) {
+        transaction.set(ref, {
+          ...INITIAL_BLUE_MARKET_STATE,
+          lastPriceAt: now,
+          updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+        });
+        return;
+      }
+
+      const previous = normalizedBlueMarketState(snapshot.data());
+      if (now - previous.lastPriceAt < BLUE_PRICE_UPDATE_INTERVAL) return;
+
+      const next = { ...previous, ...nextBluePriceState(previous) };
+      transaction.set(ref, {
+        price: next.price,
+        trendDirection: next.trendDirection,
+        trendTicksLeft: next.trendTicksLeft,
+        lastPriceAt: now,
+        updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
+      });
+    }).catch((error) => {
+      console.error("Не вдалося оновити спільний курс Blue:", error);
+      if (uid === currentUserUID && els.blueMarketStatus) {
+        els.blueMarketStatus.textContent = "Не вдалося оновити курс Blue — перевір правила Firestore.";
+      }
+    }).finally(() => {
+      blueMarketUpdateInProgress = false;
+    });
+  }
+
   function renderStats() {
     els.cash.textContent = money(state.cash);
     els.cryp.textContent = number(state.cryp) + " CRYP";
     els.rate.textContent = number(totalRate()) + " CRYP/с";
+    if (els.blue) els.blue.textContent = number(state.blue, 6) + " Blue";
+    if (els.blueRate) els.blueRate.textContent = number(totalRate("blue")) + " Blue/с";
+    if (els.bluePrice) els.bluePrice.textContent = blueMarketReady ? money(blueMarketState.price) : "—";
     const availableSlots = SLOT_COUNT + (state.hasExtraField ? state.extraUnlockedSlots.filter(Boolean).length : 0);
     els.gpuCount.textContent = allGPUs().length + " / " + availableSlots + " встановлено";
     els.price.textContent = marketReady ? money(marketState.price) : "—";
@@ -449,9 +642,15 @@
     $("infoRate").textContent = number(totalRate()) + " CRYP/с";
     $("infoInventory").textContent = String(state.inventory.length);
     $("infoPrice").textContent = marketReady ? money(marketState.price) : "—";
+    $("infoBlue").textContent = number(state.blue, 6) + " Blue";
+    $("infoBlueRate").textContent = number(totalRate("blue")) + " Blue/с";
+    $("infoBluePrice").textContent = blueMarketReady ? money(blueMarketState.price) : "—";
     if (els.exchangePrice) els.exchangePrice.textContent = marketReady ? money(marketState.price) : "—";
     if (els.exchangeBalance) els.exchangeBalance.textContent = number(state.cryp) + " CRYP";
+    if (els.blueExchangePrice) els.blueExchangePrice.textContent = blueMarketReady ? money(blueMarketState.price) : "—";
+    if (els.blueExchangeBalance) els.blueExchangeBalance.textContent = number(state.blue, 6) + " Blue";
     updateSellPreview();
+    updateBlueSellPreview();
     renderPodium();
   }
 
@@ -486,7 +685,8 @@
       const profile = {
         nickname: String(state.playerName || "Гравець").trim().slice(0, 20) || "Гравець",
         cashBalance: Math.max(0, Number(state.cash) || 0),
-        crypBalance: Math.max(0, Number(state.cryp) || 0)
+        crypBalance: Math.max(0, Number(state.cryp) || 0),
+        blueBalance: Math.max(0, Number(state.blue) || 0)
       };
       const signature = JSON.stringify(profile);
       if (signature === lastPodiumPublishSignature) return;
@@ -519,19 +719,21 @@
 
   function renderPodium() {
     if (!els.podiumRows) return;
-    if (!marketReady) {
-      renderPodiumMessage("Завантажуємо поточний курс CRYP…");
-      if (els.podiumStatus) els.podiumStatus.textContent = "Завантажуємо поточний курс CRYP…";
+    if (!marketReady || !blueMarketReady) {
+      renderPodiumMessage("Завантажуємо спільні курси CRYP і Blue…");
+      if (els.podiumStatus) els.podiumStatus.textContent = "Завантажуємо спільні курси CRYP і Blue…";
       return;
     }
     const currentRate = marketState.price;
+    const currentBlueRate = blueMarketState.price;
     const entries = podiumProfiles.map((profile) => {
       const cashBalance = Math.max(0, Number(profile.cashBalance) || 0);
       const crypBalance = Math.max(0, Number(profile.crypBalance) || 0);
+      const blueBalance = Math.max(0, Number(profile.blueBalance) || 0);
       return {
         nickname: profile.nickname || "Гравець",
         cashBalance,
-        totalCapital: cashBalance + crypBalance * currentRate,
+        totalCapital: cashBalance + crypBalance * currentRate + blueBalance * currentBlueRate,
         updatedAt: profile.updatedAt
       };
     }).sort((a, b) => b.totalCapital - a.totalCapital || a.nickname.localeCompare(b.nickname, "uk")).slice(0, 10);
@@ -621,11 +823,11 @@
         button.append(lock, label, price);
         button.addEventListener("click", () => purchaseExtraCell(index));
       } else {
-        button.className = "slot" + (gpu ? " occupied" : "");
-        button.setAttribute("aria-label", gpu ? gpu.name + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
+        button.className = "slot" + (gpu ? " occupied" + (gpu.currency === "blue" ? " blue-gpu-slot" : "") : "");
+        button.setAttribute("aria-label", gpu ? gpu.name + ", майнить " + currencyLabel(gpu.currency) + ", слот " + (index + 1) : "Порожній слот " + (index + 1));
         if (gpu) {
           button.appendChild(createGpuIcon(gpu, "farm-gpu-icon"));
-          button.title = gpu.name + " — натисни для дій";
+          button.title = gpu.name + " — видобуває " + currencyLabel(gpu.currency) + "; натисни для дій";
           button.addEventListener("click", () => openGPUActions(index));
         } else {
           const plus = document.createElement("span");
@@ -648,7 +850,7 @@
     const title = document.createElement("strong");
     title.textContent = gpuType.name;
     const details = document.createElement("span");
-    details.textContent = number(gpuType.rate) + " CRYP/с · дохід від майнінгу";
+    details.textContent = number(gpuType.rate) + " " + currencyLabel(gpuType.currency) + "/с · видобуває " + currencyLabel(gpuType.currency);
     info.append(title, details);
     const buy = document.createElement("button");
     buy.type = "button";
@@ -686,7 +888,16 @@
 
   function renderShop() {
     els.shop.replaceChildren();
-    GPU_TYPES.forEach((gpu) => els.shop.appendChild(shopCard(gpu)));
+    ["cryp", "blue"].forEach((currency) => {
+      const group = document.createElement("section");
+      group.className = "shop-currency-group " + currency + "-shop-group";
+      const heading = document.createElement("h3");
+      heading.className = "shop-currency-heading " + currency + "-shop-heading";
+      heading.textContent = currency === "blue" ? "Відеокарти для майнінгу Blue" : "Відеокарти для майнінгу CRYP";
+      group.appendChild(heading);
+      GPU_TYPES.filter((gpu) => gpu.currency === currency).forEach((gpu) => group.appendChild(shopCard(gpu)));
+      els.shop.appendChild(group);
+    });
     els.shop.appendChild(farmFieldShopCard());
   }
 
@@ -710,7 +921,7 @@
       const title = document.createElement("strong");
       title.textContent = gpu.name;
       const details = document.createElement("span");
-      details.textContent = number(gpu.rate) + " CRYP/с";
+      details.textContent = number(gpu.rate) + " " + currencyLabel(gpu.currency) + "/с · видобуває " + currencyLabel(gpu.currency);
       info.append(title, details);
       const choose = document.createElement("button");
       choose.type = "button";
@@ -734,6 +945,7 @@
       name: gpuType.name,
       icon: gpuType.icon,
       rate: gpuType.rate,
+      currency: gpuType.currency,
       cost: gpuType.price
     });
     render();
@@ -775,7 +987,7 @@
     if (!gpu) return;
     actionSlotIndex = slotIndex;
     const resalePrice = (Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)) * 0.5;
-    els.gpuActionDetails.textContent = gpu.name + " · " + number(gpu.rate) + " CRYP/с · Продаж: " + money(resalePrice);
+    els.gpuActionDetails.textContent = gpu.name + " · " + number(gpu.rate) + " " + currencyLabel(gpu.currency) + "/с · Продаж: " + money(resalePrice);
     els.gpuActionModal.hidden = false;
     $("removeGpuButton").focus();
   }
@@ -801,6 +1013,7 @@
       name: gpu.name,
       icon: gpu.icon || "▰",
       rate: gpu.rate || 0,
+      currency: gpu.currency || "cryp",
       cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)
     });
     slots[slotIndex] = null;
@@ -850,7 +1063,7 @@
     const inventoryIndex = state.inventory.findIndex((gpu) => gpu.inventoryId === inventoryId);
     if (inventoryIndex < 0) return;
     const gpu = state.inventory.splice(inventoryIndex, 1)[0];
-    slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate, cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0) };
+    slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate, currency: gpu.currency || "cryp", cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0) };
     const installedName = gpu.name;
     closeInventory();
     render();
@@ -887,6 +1100,43 @@
     showToast("Продано " + number(amount) + " CRYP за " + money(proceeds) + ".");
   }
 
+  function updateBlueSellPreview() {
+    if (!els.blueSellAmount || !els.blueSellPreview) return;
+    const amount = Number(String(els.blueSellAmount.value).trim().replace(",", "."));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      els.blueSellPreview.textContent = money(0);
+      return;
+    }
+    if (amount > state.blue) {
+      els.blueSellPreview.textContent = "Недостатньо Blue";
+      return;
+    }
+    els.blueSellPreview.textContent = money(blueMarketReady ? amount * blueMarketState.price : 0);
+  }
+
+  function sellBlue() {
+    if (!blueMarketReady) {
+      showToast("Спільний курс Blue ще не завантажився. Спробуй трохи пізніше.");
+      return;
+    }
+    const amount = Number(String(els.blueSellAmount.value).trim().replace(",", "."));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      showToast("Введи кількість Blue, яку хочеш продати.");
+      return;
+    }
+    if (amount > state.blue) {
+      showToast("У тебе недостатньо Blue для цієї операції.");
+      return;
+    }
+    const proceeds = amount * blueMarketState.price;
+    state.blue = Math.max(0, state.blue - amount);
+    state.cash += proceeds;
+    els.blueSellAmount.value = "";
+    render();
+    save();
+    showToast("Продано " + number(amount, 6) + " Blue за " + money(proceeds) + ".");
+  }
+
   function showPage(pageName) {
     document.querySelectorAll(".page-section").forEach((section) => {
       section.hidden = section.id !== "page-" + pageName;
@@ -917,6 +1167,7 @@
       lastVisibleTick = null;
     }
     updatePrice(now);
+    updateBluePrice(now);
     renderStats();
     if (Math.floor(now / 5000) !== Math.floor((now - 1000) / 5000)) save();
   }
@@ -993,11 +1244,19 @@
 
   els.sellAmount.addEventListener("input", updateSellPreview);
   $("sellButton").addEventListener("click", sellCRYP);
+  els.blueSellAmount.addEventListener("input", updateBlueSellPreview);
+  $("blueSellButton").addEventListener("click", sellBlue);
   $("sellAllButton").addEventListener("click", () => {
     els.sellAmount.value = state.cryp > 0 ? String(state.cryp) : "";
     updateSellPreview();
     if (state.cryp > 0) sellCRYP();
     else showToast("Поки що немає CRYP для продажу.");
+  });
+  $("blueSellAllButton").addEventListener("click", () => {
+    els.blueSellAmount.value = state.blue > 0 ? String(state.blue) : "";
+    updateBlueSellPreview();
+    if (state.blue > 0) sellBlue();
+    else showToast("Поки що немає Blue для продажу.");
   });
 
   els.playerName.value = state.playerName;
@@ -1139,6 +1398,7 @@
     auth.onAuthStateChanged(async (user) => {
 
       stopMarketSync();
+      stopBlueMarketSync();
       stopPodiumSync();
       cloudSaveReady = false;
       clearTimeout(cloudSaveTimer);
@@ -1191,6 +1451,7 @@
         }
 
         await startMarketSync(db, user.uid);
+        await startBlueMarketSync(db, user.uid);
         startPodiumSync(db, user.uid);
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
@@ -1225,3 +1486,4 @@
   window.setInterval(tick, 1000);
   window.addEventListener("beforeunload", save);
 })();
+
