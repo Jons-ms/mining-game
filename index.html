@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#10131d">
   <title>Майнінг-гра</title>
-  <link rel="stylesheet" href="style.css?v=20261113-1">
+  <link rel="stylesheet" href="style.css?v=20261115-1">
   <script>
     // Diagnostics for login issues, including browser-native form validation.
     window.addEventListener("error", function (event) {
@@ -41,7 +41,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js" defer></script>
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
-  <script src="game.js?v=20261113-1" defer></script>
+  <script src="market-chart.js?v=20261115-1" defer></script>
+  <script src="game.js?v=20261115-1" defer></script>
 </head>
 <body>
 
@@ -106,6 +107,35 @@
     <section class="page-section" id="page-exchange" hidden>
       <section class="panel">
         <div class="section-heading"><h2>Криптовалютна біржа</h2></div>
+        <div class="market-chart" id="marketChart">
+          <div class="chart-controls">
+            <div class="segmented" role="group" aria-label="Період графіка">
+              <button type="button" data-chart-period="1h" aria-pressed="true" class="active">1 година</button>
+              <button type="button" data-chart-period="24h" aria-pressed="false">24 години</button>
+            </div>
+            <div class="segmented" role="group" aria-label="Режим відображення">
+              <button type="button" data-chart-mode="price" aria-pressed="true" class="active" title="Вартість у гривнях">₴</button>
+              <button type="button" data-chart-mode="percent" aria-pressed="false" title="Зміна відносно початку періоду">%</button>
+            </div>
+          </div>
+          <div class="chart-legend">
+            <div class="chart-rate chart-rate-cryp">
+              <span class="chart-swatch" aria-hidden="true"></span>
+              <span class="chart-rate-name">CRYP</span>
+              <strong id="chartCrypRate">—</strong>
+              <small id="chartCrypChange"></small>
+            </div>
+            <div class="chart-rate chart-rate-blue">
+              <span class="chart-swatch" aria-hidden="true"></span>
+              <span class="chart-rate-name">Blue</span>
+              <strong id="chartBlueRate">—</strong>
+              <small id="chartBlueChange"></small>
+            </div>
+          </div>
+          <div class="chart-readout" id="chartReadout" aria-live="off"></div>
+          <div class="chart-canvas" id="chartCanvas"></div>
+          <p class="small-note" id="chartStatus" role="status" aria-live="polite"></p>
+        </div>
         <div class="exchange-currency-block cryp-exchange-block">
         <div class="exchange-balance-card">
           <span>Твій баланс криптовалюти</span>

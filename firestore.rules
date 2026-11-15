@@ -49,6 +49,52 @@ service cloud.firestore {
       allow update: if validRateData(4.25, 13.75);
     }
 
+    // Shared rate history for the Exchange chart. Docs "h-<cur>-<hour>" hold 30 s points (t0..t119) for one UTC hour,
+    // docs "d-<cur>-<day>" hold 5 min points (t0..t287) for one UTC day. Every point is a write-once field "t<slot>".
+    function historyInterval(docId) {
+      return docId.matches('h-.*') ? 3600000 : 86400000;
+    }
+    function historyKeyOk(docId, key) {
+      return docId.matches('h-.*')
+        ? key.matches('t([0-9]|[1-9][0-9]|1[01][0-9])')
+        : key.matches('t([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-7][0-9]|28[0-7])');
+    }
+    function historyPriceOk(cur, price) {
+      return price is number
+        && ((cur == 'cryp' && price >= 0.25 && price <= 7)
+          || (cur == 'blue' && price >= 4.25 && price <= 13.75));
+    }
+    function historyPointKeys(data) {
+      return data.keys().toSet().difference(['cur', 'start', 'expireAt'].toSet());
+    }
+    function validHistoryMeta(docId, data) {
+      return data.keys().hasAll(['cur', 'start', 'expireAt'])
+        && data.cur in ['cryp', 'blue']
+        && data.start is int
+        && data.start % historyInterval(docId) == 0
+        && docId.matches('[hd]-.*')
+        && docId == (docId.matches('h-.*') ? 'h-' : 'd-') + data.cur + '-' + string(math.floor(data.start / historyInterval(docId)))
+        && data.start <= request.time.toMillis() + 60000
+        && data.start >= request.time.toMillis() - 90000000
+        && data.expireAt is timestamp;
+    }
+    match /marketHistory/{docId} {
+      allow read: if request.auth != null;
+      // A new doc carries its metadata and exactly one point.
+      allow create: if request.auth != null
+        && validHistoryMeta(docId, request.resource.data)
+        && historyPointKeys(request.resource.data).size() == 1
+        && historyKeyOk(docId, historyPointKeys(request.resource.data).toList()[0])
+        && historyPriceOk(request.resource.data.cur, request.resource.data[historyPointKeys(request.resource.data).toList()[0]]);
+      // An update adds exactly one new point and never rewrites existing ones or the metadata.
+      allow update: if request.auth != null
+        && request.resource.data.diff(resource.data).affectedKeys().size() == 1
+        && !(request.resource.data.diff(resource.data).affectedKeys().toList()[0] in resource.data)
+        && historyKeyOk(docId, request.resource.data.diff(resource.data).affectedKeys().toList()[0])
+        && historyPriceOk(resource.data.cur, request.resource.data[request.resource.data.diff(resource.data).affectedKeys().toList()[0]]);
+      allow delete: if false;
+    }
+
     // Players publish only their own public ranking row; private saves remain private.
     match /podiumPlayers/{playerId} {
       allow read: if request.auth != null;

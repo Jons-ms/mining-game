@@ -331,3 +331,30 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .blue-balance-card strong { color: #8fe0ff; }
 .blue-profile-stat { border-color: rgba(55, 139, 184, .5); }
 
+/* Exchange chart: CRYP and Blue rates on one chart */
+.market-chart { margin: 16px 0 22px; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: rgba(15,22,32,.55); }
+.chart-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: #101522; }
+.segmented button { min-height: 36px; padding: 6px 14px; color: var(--muted); background: transparent; border: 0; font-size: 13px; font-weight: 700; }
+.segmented button + button { border-left: 1px solid var(--border); }
+.segmented button.active, .segmented button[aria-pressed="true"] { color: #081a15; background: var(--accent); }
+.chart-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 12px 0 6px; }
+.chart-rate { display: grid; grid-template-columns: auto 1fr; align-items: center; column-gap: 8px; row-gap: 2px; padding: 9px 11px; border: 1px solid var(--border); border-radius: 10px; background: rgba(21,26,39,.8); min-width: 0; }
+.chart-rate strong { grid-column: 1 / -1; font-size: clamp(17px, 4.6vw, 22px); letter-spacing: -.03em; }
+.chart-rate small { grid-column: 1 / -1; color: var(--muted); font-size: 11px; min-height: 14px; }
+.chart-rate-name { color: var(--muted); font-size: 12px; font-weight: 700; }
+.chart-swatch { width: 14px; height: 4px; border-radius: 2px; }
+.chart-rate-cryp .chart-swatch { background: #80f0bd; }
+.chart-rate-blue .chart-swatch { background: #4da3ff; }
+.chart-readout { min-height: 18px; color: var(--muted); font-size: 12px; }
+.chart-canvas { width: 100%; min-height: 210px; touch-action: pan-y; }
+.chart-canvas svg { display: block; }
+.chart-grid { stroke: rgba(154,166,189,.18); stroke-width: 1; }
+.chart-zero { stroke: rgba(154,166,189,.5); stroke-dasharray: 4 3; }
+.chart-axis-label { fill: var(--muted); font-size: 10px; }
+.chart-line { stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-line-cryp, .chart-dot-cryp { stroke: #80f0bd; }
+.chart-line-blue, .chart-dot-blue { stroke: #4da3ff; }
+.chart-dot { stroke-width: 2; fill: var(--panel); }
+.chart-cursor { stroke: rgba(241,244,251,.4); stroke-width: 1; }
+@media (max-width: 430px) { .market-chart { padding: 10px; } .segmented button { padding: 6px 10px; } }

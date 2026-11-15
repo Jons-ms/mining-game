@@ -224,6 +224,13 @@
   let blueMarketUnsubscribe = null;
   let blueMarketReady = false;
   let blueMarketUpdateInProgress = false;
+  // Shared rate-history chart (market-chart.js). It only displays history and never touches the rates themselves.
+  const marketChart = window.CrypChart
+    ? window.CrypChart.create({ document, getDb: () => (window.crypFirebase && window.crypFirebase.db) || null })
+    : null;
+  function recordHistoryTick(currency, tickResult) {
+    try { if (marketChart && tickResult) marketChart.recordTick(currency, tickResult); } catch (error) { console.warn("Історія курсу:", error); }
+  }
   // Cloud writes are expensive (Firestore daily quota), so periodic saves are throttled and skipped when nothing changed.
   const CLOUD_SAVE_PERIODIC_INTERVAL = 30000;
   // A shared rate timestamp further in the future than this is treated as poisoned by a wrong device clock.
@@ -461,6 +468,7 @@
         if (!snapshot.exists) return;
         marketState = normalizedMarketState(snapshot.data());
         marketReady = true;
+        if (marketChart) marketChart.setLiveRate("cryp", marketState.price, marketState.lastPriceAt);
         if (els.marketStatus) els.marketStatus.textContent = "Спільний курс синхронізується через Firestore.";
         renderStats();
       }, (error) => {
@@ -483,7 +491,9 @@
     const ref = marketRef;
     const uid = currentUserUID;
     marketUpdateInProgress = true;
+    let tickResult = null;
     window.crypFirebase.db.runTransaction(async (transaction) => {
+      tickResult = null;
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) {
         transaction.set(ref, {
@@ -508,6 +518,9 @@
         lastPriceAt: now,
         updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
       });
+      tickResult = { previousAt: previous.lastPriceAt, now, price: next.price };
+    }).then(() => {
+      recordHistoryTick("cryp", tickResult);
     }).catch((error) => {
       console.error("Не вдалося оновити спільний курс:", error);
       if (uid === currentUserUID && els.marketStatus) {
@@ -600,6 +613,7 @@
         if (!snapshot.exists) return;
         blueMarketState = normalizedBlueMarketState(snapshot.data());
         blueMarketReady = true;
+        if (marketChart) marketChart.setLiveRate("blue", blueMarketState.price, blueMarketState.lastPriceAt);
         if (els.blueMarketStatus) els.blueMarketStatus.textContent = "Спільний курс Blue синхронізується через Firestore.";
         renderStats();
       }, (error) => {
@@ -622,7 +636,9 @@
     const ref = blueMarketRef;
     const uid = currentUserUID;
     blueMarketUpdateInProgress = true;
+    let tickResult = null;
     window.crypFirebase.db.runTransaction(async (transaction) => {
+      tickResult = null;
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists) {
         transaction.set(ref, {
@@ -644,6 +660,9 @@
         lastPriceAt: now,
         updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
       });
+      tickResult = { previousAt: previous.lastPriceAt, now, price: next.price };
+    }).then(() => {
+      recordHistoryTick("blue", tickResult);
     }).catch((error) => {
       console.error("Не вдалося оновити спільний курс Blue:", error);
       if (uid === currentUserUID && els.blueMarketStatus) {
@@ -1202,6 +1221,7 @@
     });
     if (pageName === "shop") renderShop();
     if (pageName === "farm") renderFarm();
+    if (marketChart) marketChart.setVisible(pageName === "exchange");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -1222,6 +1242,7 @@
     }
     updatePrice(now);
     updateBluePrice(now);
+    if (marketChart) marketChart.tick(now);
     renderStats();
     if (Math.floor(now / 5000) !== Math.floor((now - 1000) / 5000)) save({ periodic: true });
   }
@@ -1244,6 +1265,8 @@
       save();
     }
   });
+
+  window.addEventListener("resize", () => { if (marketChart) marketChart.render(); });
 
   els.farmPrevious.addEventListener("click", () => showFarmField(0));
   els.farmNext.addEventListener("click", () => showFarmField(1));
@@ -1454,6 +1477,7 @@
 
       stopMarketSync();
       stopBlueMarketSync();
+      if (marketChart) marketChart.stop();
       stopPodiumSync();
       cloudSaveReady = false;
       clearTimeout(cloudSaveTimer);

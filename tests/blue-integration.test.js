@@ -101,6 +101,7 @@ function createGame() {
     return randomSeed;
   };
   const window = {
+    CrypChart: require('../market-chart.js'),
     crypFirebase: null,
     firebase: { firestore: { FieldValue: { serverTimestamp: () => ({ serverTimestamp: true }) } } },
     setInterval: () => 1,
@@ -569,4 +570,54 @@ test('Firestore rules validate both shared rates, including the server-time chec
   assert.match(rules, /request\.time\.toMillis\(\) \+ 60000/);
   assert.match(rules, /match \/podiumPlayers\/\{playerId\}/);
   assert.match(rules, /match \/players\/\{playerId\}/);
+});
+
+test('a rate tick that starts a new 30 s / 5 min step also writes shared history points, without touching the rate logic', async () => {
+  const { api } = createGame();
+  const { database, documents } = makeDatabase();
+  api.setUID('synthetic-test-user');
+  api.setDatabase(database);
+  await api.startBlueMarketSync(database, 'synthetic-test-user');
+
+  const start = api.getBlueMarket().lastPriceAt;
+  // Align to the first second of a 5-minute step so both the 30 s and the 5 min boundary are crossed.
+  const aligned = Math.ceil((start + 5000) / 300000) * 300000;
+  api.advanceTime(aligned - api.gameNow());
+  api.setBlueMarket(documents['market/blueExchangeRate'].price, true, aligned - 5000);
+  documents['market/blueExchangeRate'].lastPriceAt = aligned - 5000;
+  api.updateBluePrice(aligned);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const price = documents['market/blueExchangeRate'].price;
+  const historyDocs = Object.keys(documents).filter((key) => key.startsWith('marketHistory/'));
+  assert.equal(historyDocs.length, 2, 'one fine and one coarse history document');
+  const fine = documents[`marketHistory/h-blue-${Math.floor(aligned / 3600000)}`];
+  const coarse = documents[`marketHistory/d-blue-${Math.floor(aligned / 86400000)}`];
+  assert.equal(fine.cur, 'blue');
+  assert.equal(fine[`t${Math.floor((aligned % 3600000) / 30000)}`], price);
+  assert.equal(coarse[`t${Math.floor((aligned % 86400000) / 300000)}`], price);
+
+  // The next tick, 5 s later, is inside the same 30 s step: the rate moves, no new history write.
+  const before = JSON.stringify(documents);
+  api.advanceTime(5000);
+  api.updateBluePrice(aligned + 5000);
+  await new Promise((resolve) => setImmediate(resolve));
+  const after = documents['market/blueExchangeRate'];
+  assert.notEqual(after.lastPriceAt, aligned, 'the rate itself still advances every 5 seconds');
+  assert.equal(
+    Object.keys(documents).filter((key) => key.startsWith('marketHistory/')).length, 2);
+  assert.equal(JSON.stringify(Object.fromEntries(Object.entries(documents).filter(([key]) => key.startsWith('marketHistory/')))),
+    JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(before)).filter(([key]) => key.startsWith('marketHistory/')))),
+    'history documents are unchanged inside the same step');
+});
+
+test('Firestore rules protect the shared rate history (range, write-once points, bounded slots)', () => {
+  const rules = fs.readFileSync(path.join(__dirname, '..', 'firestore.rules'), 'utf8');
+  assert.match(rules, /match \/marketHistory\/\{docId\}/);
+  assert.match(rules, /allow delete: if false/);
+  assert.match(rules, /cur == 'cryp' && price >= 0\.25 && price <= 7/);
+  assert.match(rules, /cur == 'blue' && price >= 4\.25 && price <= 13\.75/);
+  assert.match(rules, /affectedKeys\(\)\.size\(\) == 1/);
+  assert.match(rules, /1\[01\]\[0-9\]/);
+  assert.match(rules, /28\[0-7\]/);
 });
