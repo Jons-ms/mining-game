@@ -129,7 +129,7 @@ function createGame() {
       sellGPUFromFarm,
       renderFarm,
       renderShop,
-      updateBlueSellPreview,
+      setSellCurrency,
       sellBlue,
       sellCRYP,
       gameNow: () => Date.now(),
@@ -304,18 +304,19 @@ test('Blue sales preview correctly, accept fractions and all, and reject oversel
   state.blue = 1.25;
   api.setState(state);
   api.setBlueMarket(10);
-  const amount = elements.get('blueSellAmount');
-  const preview = elements.get('blueSellPreview');
+  api.setSellCurrency('blue');
+  const amount = elements.get('sellAmount');
+  const preview = elements.get('sellPreview');
 
   amount.value = '0,25';
-  api.updateBlueSellPreview();
+  api.updateSellPreview();
   assert.equal(preview.textContent, '2,50 ₴');
   api.sellBlue();
   assert.equal(state.blue, 1);
   assert.equal(state.cash, 102.5);
 
   amount.value = '2';
-  api.updateBlueSellPreview();
+  api.updateSellPreview();
   assert.equal(preview.textContent, 'Недостатньо Blue');
   api.sellBlue();
   assert.equal(state.blue, 1);
@@ -419,8 +420,8 @@ test('Blue balances, rates and exchange controls have unique page elements', () 
   assert.equal(new Set(ids).size, ids.length, 'page element IDs stay unique');
   for (const id of [
     'blueValue', 'blueRateValue', 'bluePriceValue', 'blueExchangeBalance',
-    'blueExchangePrice', 'blueMarketStatus', 'blueSellAmount', 'blueSellPreview',
-    'blueSellAllButton', 'blueSellButton', 'infoBlue', 'infoBlueRate', 'infoBluePrice'
+    'blueExchangePrice', 'blueMarketStatus', 'sellAmount', 'sellPreview',
+    'sellAllButton', 'sellButton', 'infoBlue', 'infoBlueRate', 'infoBluePrice'
   ]) assert.ok(ids.includes(id), `missing Blue UI element: ${id}`);
 });
 
@@ -491,7 +492,7 @@ test('selling accepts the rounded balance shown on screen and numbers copied fro
   api.setBlueMarket(10);
   api.setCrypMarket(2);
 
-  elements.get('blueSellAmount').value = '1,234568';
+  elements.get('sellAmount').value = '1,234568';
   api.sellBlue();
   assert.equal(state.blue, 0, 'the displayed Blue balance can be sold in full');
   assert.equal(state.cash, 490 + 1.2345678 * 10, 'proceeds use the real balance, never more');
@@ -501,7 +502,7 @@ test('selling accepts the rounded balance shown on screen and numbers copied fro
   assert.equal(state.cryp, 0, 'the displayed CRYP balance can be sold in full');
 
   state.blue = 1234.5;
-  elements.get('blueSellAmount').value = '1 234,5';
+  elements.get('sellAmount').value = '1 234,5';
   api.sellBlue();
   assert.equal(state.blue, 0, 'thousands separators from the UI are accepted');
 
@@ -620,4 +621,44 @@ test('Firestore rules protect the shared rate history (range, write-once points,
   assert.match(rules, /affectedKeys\(\)\.size\(\) == 1/);
   assert.match(rules, /1\[01\]\[0-9\]/);
   assert.match(rules, /28\[0-7\]/);
+});
+
+test('one shared sell form: the toggle picks the currency, switching clears the amount, each currency sells at its own rate', () => {
+  const { api, elements } = createGame();
+  api.setRenderNoop();
+  const state = api.newState();
+  state.cash = 0;
+  state.cryp = 10;
+  state.blue = 2;
+  api.setState(state);
+  api.setCrypMarket(2);
+  api.setBlueMarket(10);
+  const amount = elements.get('sellAmount');
+  const preview = elements.get('sellPreview');
+
+  amount.value = '3';
+  api.updateSellPreview();
+  assert.equal(preview.textContent, '6,00 ₴', 'CRYP is selected by default');
+
+  api.setSellCurrency('blue');
+  assert.equal(amount.value, '', 'switching currency clears the typed amount');
+  amount.value = '3';
+  api.updateSellPreview();
+  assert.equal(preview.textContent, 'Недостатньо Blue', 'Blue balance is checked, not CRYP');
+  amount.value = '1,5';
+  api.updateSellPreview();
+  assert.equal(preview.textContent, '15,00 ₴');
+  assert.equal(elements.get('sellButton').textContent, 'Продати Blue');
+
+  api.sellBlue();
+  assert.equal(state.blue, 0.5);
+  assert.equal(state.cryp, 10, 'selling Blue does not touch CRYP');
+  assert.equal(state.cash, 15);
+
+  api.setSellCurrency('cryp');
+  amount.value = '4';
+  api.sellCRYP();
+  assert.equal(state.cryp, 6);
+  assert.equal(state.blue, 0.5);
+  assert.equal(state.cash, 23);
 });

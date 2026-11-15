@@ -152,9 +152,8 @@
     inventoryHint: $("inventoryHint"), inventoryModal: $("inventoryModal"),
     gpuActionModal: $("gpuActionModal"), gpuActionDetails: $("gpuActionDetails"),
     playerName: $("playerName"), toast: $("toast"), saveStatus: $("saveStatus"),
-    sellAmount: $("sellAmount"), sellPreview: $("sellPreview"),
+    sellAmount: $("sellAmount"), sellPreview: $("sellPreview"), sellLabel: $("sellAmountLabel"),
     exchangePrice: $("exchangePrice"), exchangeBalance: $("exchangeBalance"), marketStatus: $("marketStatus"),
-    blueSellAmount: $("blueSellAmount"), blueSellPreview: $("blueSellPreview"),
     blueExchangePrice: $("blueExchangePrice"), blueExchangeBalance: $("blueExchangeBalance"), blueMarketStatus: $("blueMarketStatus"),
     podiumRows: $("podiumRows"), podiumStatus: $("podiumStatus"), podiumUpdatedAt: $("podiumUpdatedAt"),
     farmSwitcher: $("farmSwitcher"), farmFieldLabel: $("farmFieldLabel"),
@@ -696,7 +695,6 @@
     if (els.blueExchangePrice) els.blueExchangePrice.textContent = blueMarketReady ? money(blueMarketState.price) : "—";
     if (els.blueExchangeBalance) els.blueExchangeBalance.textContent = number(state.blue, 6) + " Blue";
     updateSellPreview();
-    updateBlueSellPreview();
     renderPodium();
   }
 
@@ -1146,69 +1144,75 @@
     return { status: "ok", amount: Math.min(amount, balance) };
   }
 
-  function updateSellPreview() {
-    if (!els.sellAmount || !els.sellPreview) return;
-    const result = resolveSellAmount(parseAmount(els.sellAmount.value), state.cryp, CRYP_DISPLAY_DIGITS);
-    els.sellPreview.textContent = money(marketReady ? result.amount * marketState.price : 0);
+  // One shared sell form; the toggle chooses which currency it sells.
+  let sellCurrencyChoice = "cryp";
+
+  function sellInfo(currency) {
+    return currency === "blue"
+      ? { name: "Blue", digits: BLUE_DISPLAY_DIGITS, balance: state.blue, price: blueMarketState.price, ready: blueMarketReady, notReady: "Спільний курс Blue ще не завантажився. Спробуй трохи пізніше." }
+      : { name: "CRYP", digits: CRYP_DISPLAY_DIGITS, balance: state.cryp, price: marketState.price, ready: marketReady, notReady: "Спільний курс ще не завантажився. Спробуй трохи пізніше." };
   }
 
-  function sellCRYP() {
-    if (!marketReady) {
-      showToast("Спільний курс ще не завантажився. Спробуй трохи пізніше.");
+  function updateSellPreview() {
+    if (!els.sellAmount || !els.sellPreview) return;
+    const info = sellInfo(sellCurrencyChoice);
+    const result = resolveSellAmount(parseAmount(els.sellAmount.value), info.balance, info.digits);
+    if (result.status === "insufficient") {
+      els.sellPreview.textContent = "Недостатньо " + info.name;
       return;
     }
-    const result = resolveSellAmount(parseAmount(els.sellAmount.value), state.cryp, CRYP_DISPLAY_DIGITS);
+    els.sellPreview.textContent = money(info.ready ? result.amount * info.price : 0);
+  }
+
+  function setSellCurrency(currency, clearAmount = true) {
+    sellCurrencyChoice = currency === "blue" ? "blue" : "cryp";
+    const info = sellInfo(sellCurrencyChoice);
+    document.querySelectorAll("[data-sell-currency]").forEach((button) => {
+      const active = button.dataset.sellCurrency === sellCurrencyChoice;
+      button.classList.toggle("active", active);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    if (els.sellLabel) els.sellLabel.textContent = "Скільки " + info.name + " продати?";
+    if (els.sellAmount) {
+      // A typed amount of one currency must never silently become an amount of the other.
+      if (clearAmount) els.sellAmount.value = "";
+      els.sellAmount.setAttribute("placeholder", sellCurrencyChoice === "blue" ? "Наприклад, 1.5" : "Наприклад, 10");
+    }
+    const sellButton = $("sellButton");
+    const sellAllButton = $("sellAllButton");
+    if (sellButton) sellButton.textContent = "Продати " + info.name;
+    if (sellAllButton) sellAllButton.textContent = "Продати все " + info.name;
+    updateSellPreview();
+  }
+
+  function sellCurrency(currency) {
+    const info = sellInfo(currency);
+    if (!info.ready) {
+      showToast(info.notReady);
+      return;
+    }
+    const result = resolveSellAmount(parseAmount(els.sellAmount.value), info.balance, info.digits);
     if (result.status === "empty") {
-      showToast("Введи кількість CRYP, яку хочеш продати.");
+      showToast("Введи кількість " + info.name + ", яку хочеш продати.");
       return;
     }
     if (result.status === "insufficient") {
-      showToast("У тебе недостатньо CRYP для цієї операції.");
+      showToast("У тебе недостатньо " + info.name + " для цієї операції.");
       return;
     }
     const amount = result.amount;
-    const proceeds = amount * marketState.price;
-    state.cryp = Math.max(0, state.cryp - amount);
+    const proceeds = amount * info.price;
+    if (currency === "blue") state.blue = Math.max(0, state.blue - amount);
+    else state.cryp = Math.max(0, state.cryp - amount);
     state.cash += proceeds;
     els.sellAmount.value = "";
     render();
     save();
-    showToast("Продано " + number(amount) + " CRYP за " + money(proceeds) + ".");
+    showToast("Продано " + number(amount, info.digits) + " " + info.name + " за " + money(proceeds) + ".");
   }
 
-  function updateBlueSellPreview() {
-    if (!els.blueSellAmount || !els.blueSellPreview) return;
-    const result = resolveSellAmount(parseAmount(els.blueSellAmount.value), state.blue, BLUE_DISPLAY_DIGITS);
-    if (result.status === "insufficient") {
-      els.blueSellPreview.textContent = "Недостатньо Blue";
-      return;
-    }
-    els.blueSellPreview.textContent = money(blueMarketReady ? result.amount * blueMarketState.price : 0);
-  }
-
-  function sellBlue() {
-    if (!blueMarketReady) {
-      showToast("Спільний курс Blue ще не завантажився. Спробуй трохи пізніше.");
-      return;
-    }
-    const result = resolveSellAmount(parseAmount(els.blueSellAmount.value), state.blue, BLUE_DISPLAY_DIGITS);
-    if (result.status === "empty") {
-      showToast("Введи кількість Blue, яку хочеш продати.");
-      return;
-    }
-    if (result.status === "insufficient") {
-      showToast("У тебе недостатньо Blue для цієї операції.");
-      return;
-    }
-    const amount = result.amount;
-    const proceeds = amount * blueMarketState.price;
-    state.blue = Math.max(0, state.blue - amount);
-    state.cash += proceeds;
-    els.blueSellAmount.value = "";
-    render();
-    save();
-    showToast("Продано " + number(amount, BLUE_DISPLAY_DIGITS) + " Blue за " + money(proceeds) + ".");
-  }
+  const sellCRYP = () => sellCurrency("cryp");
+  const sellBlue = () => sellCurrency("blue");
 
   function showPage(pageName) {
     document.querySelectorAll(".page-section").forEach((section) => {
@@ -1321,20 +1325,16 @@
   });
 
   els.sellAmount.addEventListener("input", updateSellPreview);
-  $("sellButton").addEventListener("click", sellCRYP);
-  els.blueSellAmount.addEventListener("input", updateBlueSellPreview);
-  $("blueSellButton").addEventListener("click", sellBlue);
-  $("sellAllButton").addEventListener("click", () => {
-    els.sellAmount.value = state.cryp > 0 ? String(state.cryp) : "";
-    updateSellPreview();
-    if (state.cryp > 0) sellCRYP();
-    else showToast("Поки що немає CRYP для продажу.");
+  document.querySelectorAll("[data-sell-currency]").forEach((button) => {
+    button.addEventListener("click", () => setSellCurrency(button.dataset.sellCurrency));
   });
-  $("blueSellAllButton").addEventListener("click", () => {
-    els.blueSellAmount.value = state.blue > 0 ? String(state.blue) : "";
-    updateBlueSellPreview();
-    if (state.blue > 0) sellBlue();
-    else showToast("Поки що немає Blue для продажу.");
+  $("sellButton").addEventListener("click", () => sellCurrency(sellCurrencyChoice));
+  $("sellAllButton").addEventListener("click", () => {
+    const info = sellInfo(sellCurrencyChoice);
+    els.sellAmount.value = info.balance > 0 ? String(info.balance) : "";
+    updateSellPreview();
+    if (info.balance > 0) sellCurrency(sellCurrencyChoice);
+    else showToast("Поки що немає " + info.name + " для продажу.");
   });
 
   els.playerName.value = state.playerName;
