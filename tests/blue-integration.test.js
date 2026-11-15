@@ -641,6 +641,8 @@ test('one shared sell form: the toggle picks the currency, switching clears the 
   assert.equal(preview.textContent, '6,00 ₴', 'CRYP is selected by default');
 
   api.setSellCurrency('blue');
+  assert.equal(elements.get('tradeCryp').hidden, true, 'the CRYP balance and rate are hidden when Blue is selected');
+  assert.equal(elements.get('tradeBlue').hidden, false, 'the Blue balance and rate are shown');
   assert.equal(amount.value, '', 'switching currency clears the typed amount');
   amount.value = '3';
   api.updateSellPreview();

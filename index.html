@@ -136,20 +136,27 @@
           <div class="chart-canvas" id="chartCanvas"></div>
           <p class="small-note" id="chartStatus" role="status" aria-live="polite"></p>
         </div>
-        <div class="exchange-currency-block cryp-exchange-block">
-        <div class="exchange-balance-card">
-          <span>Твій баланс криптовалюти</span>
-          <strong id="exchangeBalance">0.000 CRYP</strong>
+      </section>
+
+      <section class="panel trade-panel">
+        <div class="section-heading"><h2>Обмін</h2></div>
+        <div class="segmented sell-switch" role="group" aria-label="Яку валюту показати й продати">
+          <button type="button" data-sell-currency="cryp" aria-pressed="true" class="active">CRYP</button>
+          <button type="button" data-sell-currency="blue" aria-pressed="false">Blue</button>
         </div>
-        <div class="exchange-rate-card">
-          <span>Поточний курс</span>
-          <strong id="exchangePrice">1,00 ₴</strong>
-          <small>за 1 CRYP</small>
+        <div class="exchange-currency-block cryp-exchange-block" id="tradeCryp">
+          <div class="exchange-balance-card">
+            <span>Твій баланс CRYP</span>
+            <strong id="exchangeBalance">0.000 CRYP</strong>
+          </div>
+          <div class="exchange-rate-card">
+            <span>Поточний курс CRYP</span>
+            <strong id="exchangePrice">1,00 ₴</strong>
+            <small>за 1 CRYP</small>
+          </div>
+          <p class="small-note" id="marketStatus" role="status" aria-live="polite">Підключаємо спільний курс…</p>
         </div>
-        <p class="small-note" id="marketStatus" role="status" aria-live="polite">Підключаємо спільний курс…</p>
-        </div>
-        <div class="exchange-currency-block blue-exchange-block">
-          <h3>Blue</h3>
+        <div class="exchange-currency-block blue-exchange-block" id="tradeBlue" hidden>
           <div class="exchange-balance-card blue-balance-card">
             <span>Твій баланс Blue</span>
             <strong id="blueExchangeBalance">0.000000 Blue</strong>
@@ -161,20 +168,13 @@
           </div>
           <p class="small-note" id="blueMarketStatus" role="status" aria-live="polite">Підключаємо спільний курс Blue…</p>
         </div>
-        <div class="exchange-currency-block sell-block">
-          <h3>Продаж</h3>
-          <div class="segmented sell-switch" role="group" aria-label="Яку валюту продати">
-            <button type="button" data-sell-currency="cryp" aria-pressed="true" class="active">CRYP</button>
-            <button type="button" data-sell-currency="blue" aria-pressed="false">Blue</button>
-          </div>
-          <div class="exchange-form">
-            <label for="sellAmount" id="sellAmountLabel">Скільки CRYP продати?</label>
-            <input id="sellAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="Наприклад, 10">
-            <div class="exchange-preview">Отримаєш: <strong id="sellPreview">0,00 ₴</strong></div>
-            <div class="exchange-actions">
-              <button class="secondary-button" id="sellAllButton" type="button">Продати все CRYP</button>
-              <button class="primary-button" id="sellButton" type="button">Продати CRYP</button>
-            </div>
+        <div class="exchange-form">
+          <label for="sellAmount" id="sellAmountLabel">Скільки CRYP продати?</label>
+          <input id="sellAmount" type="text" inputmode="decimal" autocomplete="off" placeholder="Наприклад, 10">
+          <div class="exchange-preview">Отримаєш: <strong id="sellPreview">0,00 ₴</strong></div>
+          <div class="exchange-actions">
+            <button class="secondary-button" id="sellAllButton" type="button">Продати все CRYP</button>
+            <button class="primary-button" id="sellButton" type="button">Продати CRYP</button>
           </div>
         </div>
       </section>

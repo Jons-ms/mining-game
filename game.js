@@ -1172,6 +1172,10 @@
       button.classList.toggle("active", active);
       button.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    const crypGroup = $("tradeCryp");
+    const blueGroup = $("tradeBlue");
+    if (crypGroup) crypGroup.hidden = sellCurrencyChoice !== "cryp";
+    if (blueGroup) blueGroup.hidden = sellCurrencyChoice !== "blue";
     if (els.sellLabel) els.sellLabel.textContent = "Скільки " + info.name + " продати?";
     if (els.sellAmount) {
       // A typed amount of one currency must never silently become an amount of the other.
