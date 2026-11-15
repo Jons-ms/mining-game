@@ -225,8 +225,20 @@
   let blueMarketUpdateInProgress = false;
   // Shared rate-history chart (market-chart.js). It only displays history and never touches the rates themselves.
   const marketChart = window.CrypChart
-    ? window.CrypChart.create({ document, getDb: () => (window.crypFirebase && window.crypFirebase.db) || null })
+    ? window.CrypChart.create({
+      document,
+      getDb: () => (window.crypFirebase && window.crypFirebase.db) || null,
+      documentId: () => {
+        const fieldPath = window.firebase && window.firebase.firestore && window.firebase.firestore.FieldPath;
+        return fieldPath ? fieldPath.documentId() : null;
+      }
+    })
     : null;
+  // The chart listens to Firestore only while the Exchange page is open; it has to be re-armed after a new sign-in too.
+  let currentPageName = "farm";
+  function syncChartVisibility() {
+    if (marketChart) marketChart.setVisible(currentPageName === "exchange");
+  }
   function recordHistoryTick(currency, tickResult) {
     try { if (marketChart && tickResult) marketChart.recordTick(currency, tickResult); } catch (error) { console.warn("Історія курсу:", error); }
   }
@@ -517,7 +529,7 @@
         lastPriceAt: now,
         updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
       });
-      tickResult = { previousAt: previous.lastPriceAt, now, price: next.price };
+      tickResult = { previousAt: previous.lastPriceAt, previousPrice: previous.price, now, price: next.price };
     }).then(() => {
       recordHistoryTick("cryp", tickResult);
     }).catch((error) => {
@@ -659,7 +671,7 @@
         lastPriceAt: now,
         updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
       });
-      tickResult = { previousAt: previous.lastPriceAt, now, price: next.price };
+      tickResult = { previousAt: previous.lastPriceAt, previousPrice: previous.price, now, price: next.price };
     }).then(() => {
       recordHistoryTick("blue", tickResult);
     }).catch((error) => {
@@ -1219,6 +1231,7 @@
   const sellBlue = () => sellCurrency("blue");
 
   function showPage(pageName) {
+    currentPageName = pageName;
     document.querySelectorAll(".page-section").forEach((section) => {
       section.hidden = section.id !== "page-" + pageName;
     });
@@ -1229,7 +1242,7 @@
     });
     if (pageName === "shop") renderShop();
     if (pageName === "farm") renderFarm();
-    if (marketChart) marketChart.setVisible(pageName === "exchange");
+    syncChartVisibility();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -1550,6 +1563,7 @@
         authScreen.hidden = true;
         gameApp.hidden = false;
         if (signOutButton) signOutButton.hidden = false;
+        syncChartVisibility();
         if (cloudSaveReady) {
           els.saveStatus.textContent = "Хмарне збереження підключено";
           save();

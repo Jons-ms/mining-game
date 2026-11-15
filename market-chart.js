@@ -9,6 +9,11 @@
  * A point is a top-level field "t<slot>" holding the rate. It is written by the client whose transaction
  * has just advanced the shared rate, only when that tick is the first one in a new 30 s / 5 min step.
  * The chart only reads and displays this history; it never changes the rates themselves.
+ *
+ * The shared rate only moves while at least one client is in the game, so it simply holds its last value during a
+ * break. The chart reflects that: a period always starts at its real start (now - period) with the rate that was in
+ * force then, and a break is drawn as a flat segment instead of the line starting at the moment a player logs in.
+ * To make that exact, the first tick after a break also stores the rate that was held through it ("gap anchor").
  */
 (function (root, factory) {
   const api = factory();
@@ -31,7 +36,9 @@
   // Documents are kept longer than the 24 h the chart needs; an optional Firestore TTL policy on "expireAt" removes them.
   const RETENTION_MS = 3 * DAY_MS;
   const MAX_CHART_POINTS = 300;
-  const COARSE_REFRESH_MS = 300000;
+  // Two stored points further apart than this many storage steps mean nobody was in the game: the rate held its value.
+  const GAP_STEPS = 3;
+  const PERIOD_OF_KIND = { fine: "1h", coarse: "24h" };
 
   // ---------- Pure helpers (covered by tests) ----------
 
@@ -70,6 +77,18 @@
     };
   }
 
+  // After a break the first tick stores the rate that was held through it, at the first storage step boundary after the
+  // last tick. (The last tick itself is usually not the first one of its step, so its own slot is taken or unrecorded.)
+  function buildGapAnchorWrite(kind, currency, tick) {
+    const step = KINDS[kind].stepMs;
+    if (!tick || !Number.isFinite(tick.previousAt) || tick.previousAt <= 0) return null;
+    if (!(Number(tick.previousPrice) > 0)) return null;
+    if (tick.now - tick.previousAt < GAP_STEPS * step) return null;
+    const anchorMs = (Math.floor(tick.previousAt / step) + 1) * step;
+    if (anchorMs >= Math.floor(tick.now / step) * step) return null;
+    return buildPointWrite(kind, currency, anchorMs, tick.previousPrice);
+  }
+
   function parseDocument(kind, data) {
     const spec = KINDS[kind];
     const points = [];
@@ -105,14 +124,47 @@
     return reduced;
   }
 
-  // Series for one currency: stored points of the period plus the current live rate as the last point.
-  function buildSeries(map, live, periodKey, nowMs) {
-    const points = selectWindow(map, nowMs, PERIODS[periodKey].ms);
-    if (live && Number.isFinite(live.price) && live.price > 0) {
+  // Last stored point strictly before the period start (from the loaded documents or the separately fetched anchor).
+  function windowAnchor(map, extra, from) {
+    let best = null;
+    map.forEach((value, t) => {
+      if (t < from && (!best || t > best.t)) best = { t, v: value };
+    });
+    if (extra && extra.t < from && (!best || extra.t > best.t)) best = extra;
+    return best;
+  }
+
+  // A break between two stored points is a flat segment at the earlier value, then the step to the later one.
+  function fillGaps(points, gapMs) {
+    const out = [];
+    points.forEach((point, index) => {
+      if (index > 0 && point.t - points[index - 1].t > gapMs) out.push({ t: point.t - 1, v: points[index - 1].v });
+      out.push(point);
+    });
+    return out;
+  }
+
+  // Series for one currency over the period [now - period, now]: the rate in force at the period start (when there was
+  // a break), the stored points, the moment of the last rate change and the current live rate as the last point.
+  function buildSeries(map, live, periodKey, nowMs, extraAnchor) {
+    const period = PERIODS[periodKey];
+    const from = nowMs - period.ms;
+    const gapMs = GAP_STEPS * KINDS[period.kind].stepMs;
+    const points = selectWindow(map, nowMs, period.ms);
+    const hasLive = Boolean(live) && Number.isFinite(live.price) && live.price > 0;
+
+    let anchor = null;
+    if (hasLive && !points.length && Number.isFinite(live.at) && live.at < from) anchor = { t: live.at, v: live.price };
+    else anchor = windowAnchor(map, extraAnchor, from);
+    if (anchor && (!points.length || points[0].t - from > gapMs)) points.unshift({ t: from, v: anchor.v });
+
+    if (hasLive) {
       const lastT = points.length ? points[points.length - 1].t : -Infinity;
-      points.push({ t: Math.max(nowMs, lastT + 1), v: live.price });
+      if (Number.isFinite(live.at) && live.at > lastT && live.at < nowMs) points.push({ t: live.at, v: live.price });
+      const tail = points.length ? points[points.length - 1].t : -Infinity;
+      points.push({ t: Math.max(nowMs, tail + 1), v: live.price });
     }
-    return limitPoints(points, MAX_CHART_POINTS);
+    return limitPoints(fillGaps(points, gapMs), MAX_CHART_POINTS);
   }
 
   // (current - start) / start * 100, where start is the first point of the selected period.
@@ -128,20 +180,19 @@
     return (points[points.length - 1].v - points[0].v) / points[0].v * 100;
   }
 
-  function buildModel(maps, live, periodKey, mode, nowMs) {
+  function buildModel(maps, live, periodKey, mode, nowMs, anchors) {
     const raw = {};
     const series = {};
     const changes = {};
-    let tMin = Infinity;
     CURRENCIES.forEach((cur) => {
-      raw[cur] = buildSeries(maps[PERIODS[periodKey].kind][cur], live[cur], periodKey, nowMs);
+      const kind = PERIODS[periodKey].kind;
+      raw[cur] = buildSeries(maps[kind][cur], live[cur], periodKey, nowMs, anchors && anchors[kind] ? anchors[kind][cur] : null);
       changes[cur] = periodChangePercent(raw[cur]);
       series[cur] = mode === "percent" ? toPercent(raw[cur]) : raw[cur];
-      if (raw[cur].length) tMin = Math.min(tMin, raw[cur][0].t);
     });
+    // The axis always spans the real selected period, never the moment a player opened the game.
     const tMax = nowMs;
-    // A short history fills the whole width instead of leaving an empty left part.
-    tMin = Number.isFinite(tMin) ? Math.max(nowMs - PERIODS[periodKey].ms, Math.min(tMin, tMax - 1)) : nowMs - PERIODS[periodKey].ms;
+    const tMin = nowMs - PERIODS[periodKey].ms;
     let yMin = Infinity;
     let yMax = -Infinity;
     CURRENCIES.forEach((cur) => series[cur].forEach((p) => {
@@ -207,12 +258,16 @@
       coarse: { cryp: new Map(), blue: new Map() }
     };
     const live = { cryp: null, blue: null };
+    // Last stored point before the loaded documents: where a period starts when the first loaded point comes after a break.
+    const anchors = { fine: { cryp: null, blue: null }, coarse: { cryp: null, blue: null } };
+    const anchorRequested = { fine: { cryp: false, blue: false }, coarse: { cryp: false, blue: false } };
     let period = "1h";
     let mode = "price";
     let visible = false;
     let unsubscribers = [];
     let subscribedHour = null;
-    let lastCoarseFetchAt = 0;
+    let coarseUnsubscribers = [];
+    let subscribedDay = null;
     let renderQueued = false;
     let historyError = false;
     let warned = false;
@@ -226,8 +281,8 @@
     function ingest(kind, currency, data) {
       const store = maps[kind][currency];
       parseDocument(kind, data).forEach((p) => store.set(p.t, p.v));
-      // Drop points older than the retention needed by the chart.
-      const oldest = Date.now() - DAY_MS - 2 * HOUR_MS;
+      // Drop points older than the stored retention (never the ones the 24 h chart or its anchor still needs).
+      const oldest = Date.now() - RETENTION_MS;
       store.forEach((_, t) => { if (t < oldest) store.delete(t); });
     }
 
@@ -240,10 +295,48 @@
       scheduleRender();
     }
 
-    function unsubscribeAll() {
+    function unsubscribeFine() {
       unsubscribers.forEach((fn) => { try { fn(); } catch (error) { /* already closed */ } });
       unsubscribers = [];
       subscribedHour = null;
+    }
+
+    function unsubscribeCoarse() {
+      coarseUnsubscribers.forEach((fn) => { try { fn(); } catch (error) { /* already closed */ } });
+      coarseUnsubscribers = [];
+      subscribedDay = null;
+    }
+
+    function unsubscribeAll() {
+      unsubscribeFine();
+      unsubscribeCoarse();
+    }
+
+    // If no loaded point lies before the period start (a break reaches further back than the loaded documents), fetch the
+    // last stored point before them once: one range query over document ids, which needs no composite index.
+    // (Ids end with a number of constant length, so id order equals time order.)
+    function ensureAnchor(kind, currency) {
+      if (anchorRequested[kind][currency]) return;
+      const db = getDb();
+      const fieldPath = options.documentId ? options.documentId() : null;
+      if (!db || !fieldPath) return;
+      const nowMs = Date.now();
+      const from = nowMs - PERIODS[PERIOD_OF_KIND[kind]].ms;
+      for (const t of maps[kind][currency].keys()) if (t < from) return;
+      const collection = db.collection(COLLECTION);
+      if (typeof collection.where !== "function") return;
+      anchorRequested[kind][currency] = true;
+      const prefix = KINDS[kind].prefix + "-" + currency + "-";
+      const earliestLoaded = docId(kind, currency, bucketIndex(kind, nowMs) - 1);
+      collection.where(fieldPath, ">=", prefix).where(fieldPath, "<", earliestLoaded).orderBy(fieldPath, "desc").limit(1).get()
+        .then((result) => {
+          result.forEach((snapshot) => {
+            const points = parseDocument(kind, snapshot.data()).sort((a, b) => a.t - b.t);
+            if (points.length) anchors[kind][currency] = points[points.length - 1];
+          });
+          scheduleRender();
+        })
+        .catch(() => { anchorRequested[kind][currency] = false; });
     }
 
     // Live listener on the current hour (2 docs) plus a single read of the previous hour, only while the Exchange is open.
@@ -252,7 +345,7 @@
       if (!db) return;
       const hour = bucketIndex("fine", nowMs);
       if (subscribedHour === hour) return;
-      unsubscribeAll();
+      unsubscribeFine();
       subscribedHour = hour;
       CURRENCIES.forEach((cur) => {
         const current = db.collection(COLLECTION).doc(docId("fine", cur, hour));
@@ -265,35 +358,50 @@
         if (typeof previous.get === "function") {
           previous.get().then((snapshot) => {
             if (snapshot.exists) ingest("fine", cur, snapshot.data());
+            ensureAnchor("fine", cur);
             scheduleRender();
           }).catch(warnOnce);
         }
       });
     }
 
-    function loadCoarse(nowMs) {
+    // 24 h chart: live listener on the current day's document plus a single read of the previous day, only while it is shown.
+    function subscribeCoarse(nowMs) {
       const db = getDb();
       if (!db) return;
-      lastCoarseFetchAt = nowMs;
       const day = bucketIndex("coarse", nowMs);
+      if (subscribedDay === day) return;
+      unsubscribeCoarse();
+      subscribedDay = day;
       CURRENCIES.forEach((cur) => {
-        [day, day - 1].forEach((index) => {
-          const ref = db.collection(COLLECTION).doc(docId("coarse", cur, index));
-          if (typeof ref.get !== "function") return;
-          ref.get().then((snapshot) => {
+        const current = db.collection(COLLECTION).doc(docId("coarse", cur, day));
+        coarseUnsubscribers.push(current.onSnapshot((snapshot) => {
+          if (snapshot.exists) ingest("coarse", cur, snapshot.data());
+          historyError = false;
+          scheduleRender();
+        }, warnOnce));
+        const previous = db.collection(COLLECTION).doc(docId("coarse", cur, day - 1));
+        if (typeof previous.get === "function") {
+          previous.get().then((snapshot) => {
             if (snapshot.exists) ingest("coarse", cur, snapshot.data());
+            ensureAnchor("coarse", cur);
             historyError = false;
             scheduleRender();
           }).catch(warnOnce);
-        });
+        }
       });
     }
 
-    // Called by the game once a second: hour rollover for the live listener and a 5-minute refresh for the 24 h chart.
+    function syncPeriodSubscription(nowMs) {
+      if (period === "24h") subscribeCoarse(nowMs);
+      else unsubscribeCoarse();
+    }
+
+    // Called by the game once a second: hour/day rollover for the live listeners.
     function tick(nowMs) {
       if (!visible) return;
       subscribeFine(nowMs);
-      if (period === "24h" && nowMs - lastCoarseFetchAt >= COARSE_REFRESH_MS) loadCoarse(nowMs);
+      syncPeriodSubscription(nowMs);
     }
 
     function setVisible(value) {
@@ -302,7 +410,7 @@
       if (visible) {
         const nowMs = Date.now();
         subscribeFine(nowMs);
-        if (period === "24h") loadCoarse(nowMs);
+        syncPeriodSubscription(nowMs);
         scheduleRender();
       } else {
         unsubscribeAll();
@@ -328,6 +436,10 @@
             console.warn("Не вдалося записати історію курсу:", error);
           }
         });
+        // First tick after a break: also keep the rate that was held through it. Best effort — if it cannot be
+        // stored (slot taken, document too old for the rules) the chart falls back to the nearest stored point.
+        const held = buildGapAnchorWrite(kind, currency, tick);
+        if (held) db.collection(COLLECTION).doc(held.id).set(held.data, { merge: true }).catch(() => {});
       });
     }
 
@@ -335,9 +447,12 @@
       unsubscribeAll();
       visible = false;
       Object.values(maps).forEach((byCur) => CURRENCIES.forEach((cur) => byCur[cur].clear()));
+      Object.keys(anchors).forEach((kind) => CURRENCIES.forEach((cur) => {
+        anchors[kind][cur] = null;
+        anchorRequested[kind][cur] = false;
+      }));
       live.cryp = null;
       live.blue = null;
-      lastCoarseFetchAt = 0;
       historyError = false;
     }
 
@@ -371,7 +486,7 @@
     function render() {
       if (!canvas) return;
       const nowMs = Date.now();
-      const model = buildModel(maps, live, period, mode, nowMs);
+      const model = buildModel(maps, live, period, mode, nowMs, anchors);
       updateControls();
 
       CURRENCIES.forEach((cur) => {
@@ -469,7 +584,7 @@
         button.addEventListener("click", () => {
           period = PERIODS[button.dataset.chartPeriod] ? button.dataset.chartPeriod : "1h";
           hoverX = null;
-          if (visible && period === "24h") loadCoarse(Date.now());
+          if (visible) syncPeriodSubscription(Date.now());
           scheduleRender();
         });
       });
@@ -482,13 +597,13 @@
     }
 
     bindControls();
-    return { setVisible, setLiveRate, recordTick, tick, stop, render: () => { if (visible) render(); }, _maps: maps };
+    return { setVisible, setLiveRate, recordTick, tick, stop, render: () => { if (visible) render(); }, _maps: maps, _anchors: anchors };
   }
 
   return {
     COLLECTION, KINDS, PERIODS, RETENTION_MS, MAX_CHART_POINTS,
-    bucketIndex, docId, slotOf, startsNewStep, buildPointWrite, parseDocument,
-    selectWindow, limitPoints, buildSeries, toPercent, periodChangePercent, buildModel,
+    bucketIndex, docId, slotOf, startsNewStep, buildPointWrite, buildGapAnchorWrite, parseDocument,
+    selectWindow, windowAnchor, fillGaps, limitPoints, buildSeries, toPercent, periodChangePercent, buildModel,
     niceTicks, formatMoney, formatPercent, create
   };
 });

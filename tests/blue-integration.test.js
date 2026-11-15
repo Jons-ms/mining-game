@@ -161,7 +161,10 @@ function createGame() {
       setPodiumProfiles: (profiles) => { podiumProfiles = profiles; },
       renderPodium,
       setRenderNoop: () => { render = () => {}; save = () => {}; },
-      getElement: (id) => document.getElementById(id)
+      getElement: (id) => document.getElementById(id),
+      showPage,
+      syncChartVisibility,
+      stopChart: () => marketChart.stop()
     };
   `;
   const instrumented = source.replace(/\}\)\(\);\s*$/, `${hook}\n})();`);
@@ -663,4 +666,60 @@ test('one shared sell form: the toggle picks the currency, switching clears the 
   assert.equal(state.cryp, 6);
   assert.equal(state.blue, 0.5);
   assert.equal(state.cash, 23);
+});
+
+test('the first tick after a break stores the rate held through it next to the new point, without touching the rate logic', async () => {
+  const { api } = createGame();
+  const { database, documents } = makeDatabase();
+  api.setUID('synthetic-test-user');
+  api.setDatabase(database);
+  await api.startBlueMarketSync(database, 'synthetic-test-user');
+
+  const hour = 3600000;
+  const now = api.gameNow();
+  const previousAt = now - 3 * hour - 12000;
+  const heldPrice = documents['market/blueExchangeRate'].price;
+  documents['market/blueExchangeRate'].lastPriceAt = previousAt;
+  api.setBlueMarket(heldPrice, true, previousAt);
+  api.updateBluePrice(now);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const boundary = (Math.floor(previousAt / 30000) + 1) * 30000;
+  const anchorDoc = documents[`marketHistory/h-blue-${Math.floor(boundary / hour)}`];
+  assert.ok(anchorDoc, 'the break anchor is stored in the shared history');
+  assert.equal(anchorDoc[`t${Math.floor((boundary % hour) / 30000)}`], Number(heldPrice.toFixed(4)));
+  const fresh = documents[`marketHistory/h-blue-${Math.floor(now / hour)}`];
+  assert.equal(fresh[`t${Math.floor((now % hour) / 30000)}`], documents['market/blueExchangeRate'].price, 'and the new point is stored too');
+  assert.ok(documents['market/blueExchangeRate'].price >= 4.25 && documents['market/blueExchangeRate'].price <= 13.75);
+});
+
+test('after sign-out and a new sign-in the chart is re-armed on the open Exchange page', () => {
+  const { api } = createGame();
+  const { database } = makeDatabase();
+  let historyListeners = 0;
+  const collection = database.collection.bind(database);
+  database.collection = (name) => {
+    const handle = collection(name);
+    const doc = handle.doc.bind(handle);
+    handle.doc = (id) => {
+      const ref = doc(id);
+      const onSnapshot = ref.onSnapshot;
+      ref.onSnapshot = (callback) => { if (name === 'marketHistory') historyListeners += 1; return onSnapshot(callback); };
+      return ref;
+    };
+    return handle;
+  };
+  api.setUID('synthetic-test-user');
+  api.setDatabase(database);
+
+  api.showPage('exchange');
+  assert.equal(historyListeners, 2, 'one live listener per currency on the current hour while the Exchange is open');
+  api.stopChart();                       // what onAuthStateChanged does on every sign-out / sign-in
+  api.syncChartVisibility();             // what the game now does at the end of a sign-in
+  assert.equal(historyListeners, 4, 'the shared history is loaded again after the new sign-in');
+
+  api.showPage('farm');
+  api.stopChart();
+  api.syncChartVisibility();
+  assert.equal(historyListeners, 4, 'no history reads while another page is open');
 });
