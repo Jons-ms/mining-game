@@ -341,7 +341,7 @@
               if (uid === currentUserUID) {
                 lastCloudSaveAt = Date.now();
                 lastCloudSaveSignature = signature;
-                els.saveStatus.textContent = "Збережено в хмарі";
+                els.saveStatus.textContent = "";
                 queuePodiumPublish(window.crypFirebase.db, uid);
               }
             });
@@ -480,7 +480,7 @@
         marketState = normalizedMarketState(snapshot.data());
         marketReady = true;
         if (marketChart) marketChart.setLiveRate("cryp", marketState.price, marketState.lastPriceAt);
-        if (els.marketStatus) els.marketStatus.textContent = "Спільний курс синхронізується через Firestore.";
+        if (els.marketStatus) els.marketStatus.textContent = "";
         renderStats();
       }, (error) => {
         marketReady = false;
@@ -625,7 +625,7 @@
         blueMarketState = normalizedBlueMarketState(snapshot.data());
         blueMarketReady = true;
         if (marketChart) marketChart.setLiveRate("blue", blueMarketState.price, blueMarketState.lastPriceAt);
-        if (els.blueMarketStatus) els.blueMarketStatus.textContent = "Спільний курс Blue синхронізується через Firestore.";
+        if (els.blueMarketStatus) els.blueMarketStatus.textContent = "";
         renderStats();
       }, (error) => {
         blueMarketReady = false;
