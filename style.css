@@ -348,11 +348,19 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .chart-rate-cryp .chart-swatch { background: #80f0bd; }
 .chart-rate-blue .chart-swatch { background: #4da3ff; }
 .chart-readout { min-height: 22px; margin: 4px 0 2px; color: var(--text, #f1f4fb); font-size: 12px; font-variant-numeric: tabular-nums; }
-.chart-canvas { width: 100%; min-height: 210px; touch-action: pan-y; }
+.chart-canvas { width: 100%; min-height: 240px; touch-action: pan-y; }
 .chart-canvas svg { display: block; }
 .chart-grid { stroke: rgba(154,166,189,.14); stroke-width: 1; stroke-dasharray: 2 4; }
 .chart-zero { stroke: rgba(154,166,189,.5); stroke-dasharray: 4 3; }
-.chart-axis-label { fill: var(--muted); font-size: 10px; }
+.chart-grid-v { stroke: rgba(154,166,189,.09); stroke-dasharray: none; }
+.chart-axis-label { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.chart-axis-unit { fill: var(--muted); font-size: 10px; font-weight: 700; }
+.chart-tip { fill: rgba(10,15,24,.94); stroke: var(--border); stroke-width: 1; }
+.chart-tip-time { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart-tip-text { fill: var(--text); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-tip-swatch-cryp { fill: #80f0bd; }
+.chart-tip-swatch-blue { fill: #4da3ff; }
+.chart-dot { pointer-events: none; }
 .chart-line { stroke-width: 2.25; stroke-linejoin: round; stroke-linecap: round; }
 .chart-line-cryp { filter: drop-shadow(0 0 4px rgba(128,240,189,.45)); }
 .chart-line-blue { filter: drop-shadow(0 0 4px rgba(77,163,255,.45)); }

@@ -49,14 +49,14 @@ service cloud.firestore {
       allow update: if validRateData(4.25, 13.75);
     }
 
-    // Shared rate history for the Exchange chart. Docs "h-<cur>-<hour>" hold 30 s points (t0..t119) for one UTC hour,
+    // Shared rate history for the Exchange chart. Docs "h-<cur>-<hour>" hold 5 s points (t0..t719) for one UTC hour,
     // docs "d-<cur>-<day>" hold 5 min points (t0..t287) for one UTC day. Every point is a write-once field "t<slot>".
     function historyInterval(docId) {
       return docId.matches('h-.*') ? 3600000 : 86400000;
     }
     function historyKeyOk(docId, key) {
       return docId.matches('h-.*')
-        ? key.matches('t([0-9]|[1-9][0-9]|1[01][0-9])')
+        ? key.matches('t([0-9]|[1-9][0-9]|[1-6][0-9][0-9]|7[01][0-9])')
         : key.matches('t([0-9]|[1-9][0-9]|1[0-9][0-9]|2[0-7][0-9]|28[0-7])');
     }
     function historyPriceOk(cur, price) {

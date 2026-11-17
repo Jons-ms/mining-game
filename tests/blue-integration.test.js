@@ -48,7 +48,7 @@ function makeDatabase(seed = {}) {
             notify(ref.path);
             return () => listeners.get(ref.path)?.delete(callback);
           };
-          ref.set = async (data) => { documents[ref.path] = { ...data }; notify(ref.path); };
+          ref.set = async (data, options) => { documents[ref.path] = options && options.merge ? { ...(documents[ref.path] || {}), ...data } : { ...data }; notify(ref.path); };
           return ref;
         }
       };
@@ -576,7 +576,7 @@ test('Firestore rules validate both shared rates, including the server-time chec
   assert.match(rules, /match \/players\/\{playerId\}/);
 });
 
-test('a rate tick that starts a new 30 s / 5 min step also writes shared history points, without touching the rate logic', async () => {
+test('every rate tick (5 s step) and every 5 min step also writes shared history points, without touching the rate logic', async () => {
   const { api } = createGame();
   const { database, documents } = makeDatabase();
   api.setUID('synthetic-test-user');
@@ -584,7 +584,7 @@ test('a rate tick that starts a new 30 s / 5 min step also writes shared history
   await api.startBlueMarketSync(database, 'synthetic-test-user');
 
   const start = api.getBlueMarket().lastPriceAt;
-  // Align to the first second of a 5-minute step so both the 30 s and the 5 min boundary are crossed.
+  // Align to the first second of a 5-minute step so both the 5 s and the 5 min boundary are crossed.
   const aligned = Math.ceil((start + 5000) / 300000) * 300000;
   api.advanceTime(aligned - api.gameNow());
   api.setBlueMarket(documents['market/blueExchangeRate'].price, true, aligned - 5000);
@@ -598,21 +598,22 @@ test('a rate tick that starts a new 30 s / 5 min step also writes shared history
   const fine = documents[`marketHistory/h-blue-${Math.floor(aligned / 3600000)}`];
   const coarse = documents[`marketHistory/d-blue-${Math.floor(aligned / 86400000)}`];
   assert.equal(fine.cur, 'blue');
-  assert.equal(fine[`t${Math.floor((aligned % 3600000) / 30000)}`], price);
+  assert.equal(fine[`t${Math.floor((aligned % 3600000) / 5000)}`], price);
   assert.equal(coarse[`t${Math.floor((aligned % 86400000) / 300000)}`], price);
 
-  // The next tick, 5 s later, is inside the same 30 s step: the rate moves, no new history write.
-  const before = JSON.stringify(documents);
+  // The next tick, 5 s later, is a new 5 s step: the fine chart gets another point, the 5-minute one does not.
   api.advanceTime(5000);
   api.updateBluePrice(aligned + 5000);
   await new Promise((resolve) => setImmediate(resolve));
-  const after = documents['market/blueExchangeRate'];
-  assert.notEqual(after.lastPriceAt, aligned, 'the rate itself still advances every 5 seconds');
-  assert.equal(
-    Object.keys(documents).filter((key) => key.startsWith('marketHistory/')).length, 2);
-  assert.equal(JSON.stringify(Object.fromEntries(Object.entries(documents).filter(([key]) => key.startsWith('marketHistory/')))),
-    JSON.stringify(Object.fromEntries(Object.entries(JSON.parse(before)).filter(([key]) => key.startsWith('marketHistory/')))),
-    'history documents are unchanged inside the same step');
+  const next = documents['market/blueExchangeRate'];
+  assert.notEqual(next.lastPriceAt, aligned, 'the rate itself still advances every 5 seconds');
+  assert.equal(Object.keys(documents).filter((key) => key.startsWith('marketHistory/')).length, 2);
+  const slot = Math.floor((aligned % 3600000) / 5000);
+  const fineNow = documents[`marketHistory/h-blue-${Math.floor(aligned / 3600000)}`];
+  const coarseNow = documents[`marketHistory/d-blue-${Math.floor(aligned / 86400000)}`];
+  assert.equal(fineNow[`t${slot + 1}`], next.price, 'the next 5 s rate change is stored as its own chart point');
+  assert.equal(Object.keys(fineNow).filter((key) => /^t\d+$/.test(key)).length, 2);
+  assert.equal(Object.keys(coarseNow).filter((key) => /^t\d+$/.test(key)).length, 1, 'the 5-minute history is not written again');
 });
 
 test('Firestore rules protect the shared rate history (range, write-once points, bounded slots)', () => {
@@ -622,7 +623,7 @@ test('Firestore rules protect the shared rate history (range, write-once points,
   assert.match(rules, /cur == 'cryp' && price >= 0\.25 && price <= 7/);
   assert.match(rules, /cur == 'blue' && price >= 4\.25 && price <= 13\.75/);
   assert.match(rules, /affectedKeys\(\)\.size\(\) == 1/);
-  assert.match(rules, /1\[01\]\[0-9\]/);
+  assert.match(rules, /\[1-6\]\[0-9\]\[0-9\]\|7\[01\]\[0-9\]/);
   assert.match(rules, /28\[0-7\]/);
 });
 
@@ -684,12 +685,12 @@ test('the first tick after a break stores the rate held through it next to the n
   api.updateBluePrice(now);
   await new Promise((resolve) => setImmediate(resolve));
 
-  const boundary = (Math.floor(previousAt / 30000) + 1) * 30000;
+  const boundary = (Math.floor(previousAt / 5000) + 1) * 5000;
   const anchorDoc = documents[`marketHistory/h-blue-${Math.floor(boundary / hour)}`];
   assert.ok(anchorDoc, 'the break anchor is stored in the shared history');
-  assert.equal(anchorDoc[`t${Math.floor((boundary % hour) / 30000)}`], Number(heldPrice.toFixed(4)));
+  assert.equal(anchorDoc[`t${Math.floor((boundary % hour) / 5000)}`], Number(heldPrice.toFixed(4)));
   const fresh = documents[`marketHistory/h-blue-${Math.floor(now / hour)}`];
-  assert.equal(fresh[`t${Math.floor((now % hour) / 30000)}`], documents['market/blueExchangeRate'].price, 'and the new point is stored too');
+  assert.equal(fresh[`t${Math.floor((now % hour) / 5000)}`], documents['market/blueExchangeRate'].price, 'and the new point is stored too');
   assert.ok(documents['market/blueExchangeRate'].price >= 4.25 && documents['market/blueExchangeRate'].price <= 13.75);
 });
 

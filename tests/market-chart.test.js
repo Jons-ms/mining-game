@@ -6,20 +6,20 @@ const chart = require('../market-chart.js');
 
 const HOUR = 3600000;
 const DAY = 86400000;
-const STEP = 30000;
+const STEP = 5000;
 
-test('history storage keys: hour docs hold 30 s slots, day docs hold 5 min slots', () => {
+test('history storage keys: hour docs hold 5 s slots, day docs hold 5 min slots', () => {
   const t = 1_700_000_000_000;
   const fine = chart.buildPointWrite('fine', 'cryp', t, 3.123456);
   assert.equal(fine.id, `h-cryp-${Math.floor(t / HOUR)}`);
   assert.equal(fine.data.start, Math.floor(t / HOUR) * HOUR);
-  assert.equal(fine.data[`t${Math.floor((t % HOUR) / 30000)}`], 3.1235);
+  assert.equal(fine.data[`t${Math.floor((t % HOUR) / 5000)}`], 3.1235);
   assert.equal(fine.data.expireAt.getTime(), fine.data.start + chart.RETENTION_MS);
   const coarse = chart.buildPointWrite('coarse', 'blue', t, 9);
   assert.equal(coarse.id, `d-blue-${Math.floor(t / DAY)}`);
-  assert.ok(chart.slotOf('fine', t) >= 0 && chart.slotOf('fine', t) < 120);
+  assert.ok(chart.slotOf('fine', t) >= 0 && chart.slotOf('fine', t) < 720);
   assert.ok(chart.slotOf('coarse', t) >= 0 && chart.slotOf('coarse', t) < 288);
-  assert.equal(chart.slotOf('fine', Math.floor(t / HOUR) * HOUR + HOUR - 1), 119);
+  assert.equal(chart.slotOf('fine', Math.floor(t / HOUR) * HOUR + HOUR - 1), 719);
   assert.equal(chart.slotOf('coarse', Math.floor(t / DAY) * DAY + DAY - 1), 287);
 });
 
@@ -33,17 +33,17 @@ test('write volume: a point is stored only when a tick enters a new step', () =>
     if (chart.startsNewStep('coarse', previous, now)) coarse += 1;
     previous = now;
   }
-  assert.equal(fine, 120, '120 points per hour instead of 720 rate ticks');
+  assert.equal(fine, 720, 'every 5 s rate tick is stored: 720 points per hour');
   assert.equal(coarse, 12, '12 points per hour for the 24 h chart');
   assert.equal(chart.startsNewStep('fine', 0, base), true);
 });
 
 test('stored documents parse back into timestamped points; junk fields are ignored', () => {
   const start = 10 * HOUR;
-  const points = chart.parseDocument('fine', { cur: 'cryp', start, expireAt: new Date(), t0: 1.5, t119: 2, t120: 9, tx: 3, t5: -1, t7: 'bad' });
+  const points = chart.parseDocument('fine', { cur: 'cryp', start, expireAt: new Date(), t0: 1.5, t719: 2, t720: 9, tx: 3, t5: -1, t7: 'bad' });
   assert.deepEqual(points.sort((a, b) => a.t - b.t), [
     { t: start, v: 1.5 },
-    { t: start + 119 * 30000, v: 2 }
+    { t: start + 719 * 5000, v: 2 }
   ]);
   assert.deepEqual(chart.parseDocument('fine', null), []);
 });
@@ -340,4 +340,17 @@ test('page switch after a re-login keeps the chart armed', async () => {
   await new Promise((resolve) => setTimeout(resolve, 5));
   assert.equal(dom.byId.get('chartCanvas').children[0].tag, 'svg');
   controller.stop();
+});
+
+test('time axis marks: every 10 minutes for the 1-hour chart, aligned to the local clock', () => {
+  const now = new Date(2026, 10, 17, 21, 57, 31).getTime();
+  const ticks = chart.timeTicks(now - HOUR, now, HOUR);
+  assert.equal(ticks.length, 6);
+  ticks.forEach((t) => {
+    const d = new Date(t);
+    assert.equal(d.getMinutes() % 10, 0);
+    assert.equal(d.getSeconds(), 0);
+    assert.ok(t >= now - HOUR && t <= now);
+  });
+  assert.equal(chart.formatTimeSeconds(new Date(2026, 10, 17, 9, 5, 7).getTime()), '09:05:07');
 });

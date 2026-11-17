@@ -4,10 +4,10 @@
  * Exchange chart: one shared chart with the CRYP and Blue rate history.
  *
  * Storage (Cloud Firestore, collection "marketHistory", shared by all players):
- *  - fine docs   "h-<cur>-<hourIndex>": one point per 30 s, up to 120 points per UTC hour (1-hour chart)
+ *  - fine docs   "h-<cur>-<hourIndex>": one point per 5 s (every rate change), up to 720 points per UTC hour (1-hour chart)
  *  - coarse docs "d-<cur>-<dayIndex>":  one point per 5 min, up to 288 points per UTC day (24-hour chart)
  * A point is a top-level field "t<slot>" holding the rate. It is written by the client whose transaction
- * has just advanced the shared rate, only when that tick is the first one in a new 30 s / 5 min step.
+ * has just advanced the shared rate, only when that tick is the first one in a new 5 s / 5 min step.
  * The chart only reads and displays this history; it never changes the rates themselves.
  *
  * The shared rate only moves while at least one client is in the game, so it simply holds its last value during a
@@ -26,7 +26,7 @@
   const HOUR_MS = 3600000;
   const DAY_MS = 86400000;
   const KINDS = {
-    fine: { prefix: "h", bucketMs: HOUR_MS, stepMs: 30000, slots: 120 },
+    fine: { prefix: "h", bucketMs: HOUR_MS, stepMs: 5000, slots: 720 },
     coarse: { prefix: "d", bucketMs: DAY_MS, stepMs: 300000, slots: 288 }
   };
   const PERIODS = {
@@ -35,7 +35,7 @@
   };
   // Documents are kept longer than the 24 h the chart needs; an optional Firestore TTL policy on "expireAt" removes them.
   const RETENTION_MS = 3 * DAY_MS;
-  const MAX_CHART_POINTS = 300;
+  const MAX_CHART_POINTS = 800;
   // Two stored points further apart than this many storage steps mean nobody was in the game: the rate held its value.
   const GAP_STEPS = 3;
   const PERIOD_OF_KIND = { fine: "1h", coarse: "24h" };
@@ -239,6 +239,20 @@
     return pad2(date.getHours()) + ":" + pad2(date.getMinutes());
   }
 
+  function formatTimeSeconds(ms) {
+    const date = new Date(ms);
+    return pad2(date.getHours()) + ":" + pad2(date.getMinutes()) + ":" + pad2(date.getSeconds());
+  }
+
+  // Round clock marks (local time) inside [min, max]: every 10 minutes for the 1-hour chart, every 3 hours for a day.
+  function timeTicks(min, max, periodMs) {
+    const step = periodMs <= HOUR_MS ? 600000 : 3 * HOUR_MS;
+    const offset = -new Date(min).getTimezoneOffset() * 60000;
+    const ticks = [];
+    for (let t = Math.ceil((min + offset) / step) * step - offset; t <= max; t += step) ticks.push(t);
+    return ticks;
+  }
+
   function valueAt(points, t) {
     let best = null;
     for (const p of points) {
@@ -272,6 +286,7 @@
     let historyError = false;
     let warned = false;
     let hoverX = null;
+    let lastRenderBucket = 0;
 
     const $ = (id) => doc.getElementById(id);
     const canvas = $("chartCanvas");
@@ -402,6 +417,9 @@
       if (!visible) return;
       subscribeFine(nowMs);
       syncPeriodSubscription(nowMs);
+      // Redraw on every 5 s boundary so the time axis keeps moving even if no new rate arrived in that moment.
+      const bucket = Math.floor(nowMs / 5000);
+      if (bucket !== lastRenderBucket) scheduleRender();
     }
 
     function setVisible(value) {
@@ -486,6 +504,7 @@
     function render() {
       if (!canvas) return;
       const nowMs = Date.now();
+      lastRenderBucket = Math.floor(nowMs / 5000);
       const model = buildModel(maps, live, period, mode, nowMs, anchors);
       updateControls();
 
@@ -508,8 +527,8 @@
       }
 
       const width = Math.max(260, Math.floor(canvas.clientWidth || 320));
-      const height = width < 480 ? 210 : 250;
-      const margin = { left: 50, right: 12, top: 10, bottom: 24 };
+      const height = width < 480 ? 240 : 290;
+      const margin = { left: 46, right: 12, top: 12, bottom: 26 };
       const plotW = width - margin.left - margin.right;
       const plotH = height - margin.top - margin.bottom;
       const x = (t) => margin.left + (t - model.tMin) / Math.max(1, model.tMax - model.tMin) * plotW;
@@ -530,10 +549,14 @@
           mode === "percent" ? formatPercent(tick, Math.abs(tick) < 10 ? 1 : 0) : tick.toFixed(tick % 1 === 0 ? 0 : 1).replace(".", ",")));
       });
 
-      [0, 0.5, 1].forEach((fraction) => {
-        const t = model.tMin + (model.tMax - model.tMin) * fraction;
-        svg.appendChild(svgEl("text", { x: margin.left + plotW * fraction, y: height - 6, "text-anchor": fraction === 0 ? "start" : fraction === 1 ? "end" : "middle", class: "chart-axis-label" }, formatTime(t)));
+      // Time axis: round marks (every 10 minutes) with a faint vertical line, so any point can be read as a clock time.
+      timeTicks(model.tMin, model.tMax, PERIODS[period].ms).forEach((t) => {
+        const tx = x(t);
+        if (tx < margin.left + 14 || tx > width - margin.right - 14) return;
+        svg.appendChild(svgEl("line", { x1: tx, x2: tx, y1: margin.top, y2: margin.top + plotH, class: "chart-grid chart-grid-v" }));
+        svg.appendChild(svgEl("text", { x: tx, y: height - 8, "text-anchor": "middle", class: "chart-axis-label" }, formatTime(t)));
       });
+      svg.appendChild(svgEl("text", { x: margin.left - 6, y: margin.top - 2, "text-anchor": "end", class: "chart-axis-unit" }, mode === "percent" ? "%" : "₴"));
 
       // Soft gradient under each line (purely decorative; the data and the line itself are unchanged).
       const defs = svgEl("defs");
@@ -569,10 +592,28 @@
         const clamped = Math.max(margin.left, Math.min(width - margin.right, hoverX));
         hoverTime = model.tMin + (clamped - margin.left) / plotW * (model.tMax - model.tMin);
         svg.appendChild(svgEl("line", { x1: clamped, x2: clamped, y1: margin.top, y2: margin.top + plotH, class: "chart-cursor" }));
+        const tipRows = [];
         CURRENCIES.forEach((cur) => {
           const p = valueAt(model.series[cur], hoverTime);
-          if (p) svg.appendChild(svgEl("circle", { cx: x(p.t), cy: y(p.v), r: 3, class: "chart-dot chart-dot-" + cur }));
+          if (!p) return;
+          svg.appendChild(svgEl("circle", { cx: x(p.t), cy: y(p.v), r: 3.5, class: "chart-dot chart-dot-" + cur }));
+          const rawPoint = valueAt(model.raw[cur], hoverTime);
+          tipRows.push({ cur, text: NAMES[cur] + "  " + (mode === "percent" ? formatPercent(p.v, 2) + (rawPoint ? " (" + formatMoney(rawPoint.v) + ")" : "") : formatMoney(p.v)) });
         });
+        if (tipRows.length) {
+          const title = formatTimeSeconds(hoverTime);
+          const tipW = Math.max(title.length, ...tipRows.map((r) => r.text.length)) * 6.4 + 30;
+          const tipH = 22 + tipRows.length * 16;
+          const tipX = clamped + 12 + tipW > width - margin.right ? clamped - 12 - tipW : clamped + 12;
+          const tipY = margin.top + 4;
+          svg.appendChild(svgEl("rect", { x: tipX, y: tipY, width: tipW, height: tipH, rx: 8, class: "chart-tip" }));
+          svg.appendChild(svgEl("text", { x: tipX + 10, y: tipY + 16, class: "chart-tip-time" }, title));
+          tipRows.forEach((row, index) => {
+            const rowY = tipY + 32 + index * 16;
+            svg.appendChild(svgEl("circle", { cx: tipX + 14, cy: rowY - 4, r: 3.5, class: "chart-tip-swatch chart-tip-swatch-" + row.cur }));
+            svg.appendChild(svgEl("text", { x: tipX + 24, y: rowY, class: "chart-tip-text" }, row.text));
+          });
+        }
       }
 
       const move = (event) => {
@@ -628,6 +669,6 @@
     COLLECTION, KINDS, PERIODS, RETENTION_MS, MAX_CHART_POINTS,
     bucketIndex, docId, slotOf, startsNewStep, buildPointWrite, buildGapAnchorWrite, parseDocument,
     selectWindow, windowAnchor, fillGaps, limitPoints, buildSeries, toPercent, periodChangePercent, buildModel,
-    niceTicks, formatMoney, formatPercent, create
+    niceTicks, timeTicks, formatMoney, formatPercent, formatTimeSeconds, create
   };
 });
