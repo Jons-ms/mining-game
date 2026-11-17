@@ -160,7 +160,7 @@ test('controller renders both lines and current rates from shared history, and s
 
   const svg = dom.byId.get('chartCanvas').children[0];
   assert.equal(svg.tag, 'svg');
-  const paths = svg.children.filter((n) => n.tag === 'path');
+  const paths = svg.children.filter((n) => n.tag === 'path' && /chart-line/.test(n.attrs.class || ''));
   assert.equal(paths.length, 2, 'one line per cryptocurrency');
   assert.notEqual(paths[0].attrs.class, paths[1].attrs.class);
   assert.equal(dom.byId.get('chartCrypRate').textContent, '3,50 ₴');

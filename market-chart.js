@@ -493,7 +493,11 @@
         const rateEl = $(cur === "cryp" ? "chartCrypRate" : "chartBlueRate");
         const changeEl = $(cur === "cryp" ? "chartCrypChange" : "chartBlueChange");
         if (rateEl) rateEl.textContent = live[cur] ? formatMoney(live[cur].price) : "—";
-        if (changeEl) changeEl.textContent = model.changes[cur] === null ? "" : "за " + (period === "1h" ? "годину" : "добу") + ": " + formatPercent(model.changes[cur]);
+        if (changeEl) {
+          changeEl.textContent = model.changes[cur] === null ? "" : "за " + (period === "1h" ? "годину" : "добу") + ": " + formatPercent(model.changes[cur]);
+          changeEl.classList.toggle("chart-up", model.changes[cur] !== null && model.changes[cur] > 0);
+          changeEl.classList.toggle("chart-down", model.changes[cur] !== null && model.changes[cur] < 0);
+        }
       });
 
       const pointCount = Math.max(model.raw.cryp.length, model.raw.blue.length);
@@ -531,12 +535,32 @@
         svg.appendChild(svgEl("text", { x: margin.left + plotW * fraction, y: height - 6, "text-anchor": fraction === 0 ? "start" : fraction === 1 ? "end" : "middle", class: "chart-axis-label" }, formatTime(t)));
       });
 
+      // Soft gradient under each line (purely decorative; the data and the line itself are unchanged).
+      const defs = svgEl("defs");
+      CURRENCIES.forEach((cur) => {
+        const gradient = svgEl("linearGradient", { id: "chartFill-" + cur, x1: "0", y1: "0", x2: "0", y2: "1" });
+        gradient.appendChild(svgEl("stop", { offset: "0%", class: "chart-fill-stop chart-fill-stop-" + cur, "stop-opacity": "0.3" }));
+        gradient.appendChild(svgEl("stop", { offset: "100%", class: "chart-fill-stop chart-fill-stop-" + cur, "stop-opacity": "0" }));
+        defs.appendChild(gradient);
+      });
+      svg.appendChild(defs);
+
+      const baseY = margin.top + plotH;
+      CURRENCIES.forEach((cur) => {
+        const points = model.series[cur];
+        if (points.length < 2) return;
+        const line = points.map((p, index) => (index ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.v).toFixed(1)).join(" ");
+        const area = line + " L" + x(points[points.length - 1].t).toFixed(1) + " " + baseY + " L" + x(points[0].t).toFixed(1) + " " + baseY + " Z";
+        svg.appendChild(svgEl("path", { d: area, class: "chart-area", fill: "url(#chartFill-" + cur + ")", stroke: "none" }));
+      });
+
       CURRENCIES.forEach((cur) => {
         const points = model.series[cur];
         if (!points.length) return;
         const path = points.map((p, index) => (index ? "L" : "M") + x(p.t).toFixed(1) + " " + y(p.v).toFixed(1)).join(" ");
         svg.appendChild(svgEl("path", { d: path, class: "chart-line chart-line-" + cur, fill: "none" }));
         const last = points[points.length - 1];
+        svg.appendChild(svgEl("circle", { cx: x(last.t), cy: y(last.v), r: 6, class: "chart-pulse chart-pulse-" + cur }));
         svg.appendChild(svgEl("circle", { cx: x(last.t), cy: y(last.v), r: 3.5, class: "chart-dot chart-dot-" + cur }));
       });
 
