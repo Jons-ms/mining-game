@@ -389,7 +389,7 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .bank-card {
   --c1: #0b3a8f; --c2: #2a7de1; --c3: #ffd23f; --glow: rgba(42, 125, 225, .45);
   --s1: rgba(140, 200, 255, .6); --s2: rgba(255, 236, 140, .6); --s3: rgba(255, 255, 255, .35);
-  position: relative; isolation: isolate; display: flex; flex-direction: column; gap: 10px; min-height: 188px; padding: 18px 20px;
+  position: relative; isolation: isolate; display: flex; flex-direction: column; justify-content: space-between; gap: 4px; aspect-ratio: 1.586 / 1; max-width: 400px; padding: 14px 18px;
   border-radius: 20px; color: #fff; overflow: hidden; text-shadow: 0 1px 6px rgba(0, 0, 0, .35);
   background:
     radial-gradient(120% 90% at 100% 100%, var(--c3) 0%, transparent 58%),
@@ -402,26 +402,23 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 .bank-card::before {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; mix-blend-mode: soft-light; opacity: .9;
   background: linear-gradient(115deg, transparent 20%, rgba(255, 255, 255, .8) 32%, var(--s1) 40%, var(--s2) 48%, var(--s3) 56%, transparent 68%);
-  background-size: 260% 100%; background-position: 100% 0; animation: bank-sheen 7s ease-in-out infinite;
+  background-size: 260% 100%; background-position: 40% 0;
 }
-/* glass highlight and a faint grain of light dots */
+/* soft glass highlight on the upper half */
 .bank-card::after {
   content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background:
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, .35) 0 1px, transparent 2px) 0 0 / 22px 22px,
-    linear-gradient(180deg, rgba(255, 255, 255, .16), transparent 42%);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .16), transparent 42%);
   opacity: .55;
 }
-@keyframes bank-sheen { 0%, 100% { background-position: 100% 0; } 50% { background-position: 0 0; } }
 
 .bank-card-uah  { --c1: #0a3586; --c2: #2f7fe8; --c3: #ffd21f; --glow: rgba(47, 127, 232, .5); --s1: rgba(150, 205, 255, .6); --s2: rgba(255, 232, 120, .65); --s3: rgba(255, 255, 255, .3); }
 .bank-card-cryp { --c1: #033b2c; --c2: #0fae6e; --c3: #8affc9; --glow: rgba(15, 174, 110, .5); --s1: rgba(150, 255, 210, .6); --s2: rgba(215, 255, 140, .55); --s3: rgba(255, 255, 255, .3); }
-.bank-card-blue { --c1: #05508f; --c2: #1eb4ff; --c3: #b4ecff; --glow: rgba(30, 180, 255, .5); --s1: rgba(160, 235, 255, .65); --s2: rgba(210, 245, 255, .6); --s3: rgba(255, 255, 255, .35); }
+.bank-card-blue { --c1: #1f7ae0; --c2: #4db8ff; --c3: #c8f1ff; --glow: rgba(77, 184, 255, .45); --s1: rgba(215, 244, 255, .6); --s2: rgba(190, 230, 255, .55); --s3: rgba(255, 255, 255, .35); }
 
 .bank-card-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; letter-spacing: .14em; }
-.bank-card-code { padding: 4px 11px; border-radius: 99px; background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .35); backdrop-filter: blur(6px); letter-spacing: .08em; }
-.bank-card-chip { width: 36px; height: 26px; border-radius: 6px; background: linear-gradient(135deg, #fff1c2, #d9b45a 55%, #fff1c2); box-shadow: 0 0 0 1px rgba(0, 0, 0, .18) inset; opacity: .95; }
-.bank-card-balance { display: grid; gap: 2px; }
+.bank-card-code { padding: 4px 11px; border-radius: 99px; background: rgba(255, 255, 255, .18); border: 1px solid rgba(255, 255, 255, .35); letter-spacing: .08em; }
+.bank-card-chip { width: 34px; height: 24px; flex: none; border-radius: 6px; background: linear-gradient(135deg, #fff1c2, #d9b45a 55%, #fff1c2); box-shadow: 0 0 0 1px rgba(0, 0, 0, .18) inset; opacity: .95; }
+.bank-card-balance { display: grid; gap: 0; }
 .bank-card-label { font-size: 11px; opacity: .85; letter-spacing: .06em; text-transform: uppercase; }
 .bank-card-amount { font-size: clamp(22px, 6vw, 28px); letter-spacing: -.01em; overflow-wrap: anywhere; }
 .bank-card-number { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 16px; letter-spacing: .14em; }
@@ -429,14 +426,12 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 
 /* not opened yet: a frosted outline card tinted in the currency colour */
 .bank-card-empty { color: var(--text); text-shadow: none; background: linear-gradient(135deg, color-mix(in srgb, var(--c2) 18%, transparent), color-mix(in srgb, var(--c3) 10%, transparent)), var(--panel-soft); border: 1px dashed color-mix(in srgb, var(--c2) 70%, #fff 0%); box-shadow: none; }
-.bank-card-empty::before { opacity: .22; animation: none; }
+.bank-card-empty::before { opacity: .22; }
 .bank-card-empty::after { opacity: .25; }
 .bank-card-empty .bank-card-code { background: color-mix(in srgb, var(--c2) 28%, transparent); border-color: color-mix(in srgb, var(--c2) 60%, transparent); }
 .bank-card-note { margin: 0; color: var(--muted); font-size: 12px; }
 .bank-open-button { margin-top: auto; }
 .bank-open-button:disabled { opacity: .55; cursor: default; }
-
-@media (prefers-reduced-motion: reduce) { .bank-card::before { animation: none; background-position: 40% 0; } }
 
 @media (max-width: 760px) { .page-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 430px) { .page-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -449,5 +444,6 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
     overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; scrollbar-width: none;
   }
   .bank-cards::-webkit-scrollbar { display: none; }
-  .bank-card { flex: 0 0 80%; max-width: 340px; min-height: 196px; scroll-snap-align: center; scroll-snap-stop: always; }
+  .bank-card { flex: 0 0 86%; max-width: 340px; scroll-snap-align: center; scroll-snap-stop: always; }
+  .bank-card-number { font-size: 15px; }
 }
