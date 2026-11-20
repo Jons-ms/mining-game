@@ -354,3 +354,26 @@ test('time axis marks: every 10 minutes for the 1-hour chart, aligned to the loc
   });
   assert.equal(chart.formatTimeSeconds(new Date(2026, 10, 17, 9, 5, 7).getTime()), '09:05:07');
 });
+
+test('ticks produced while the Exchange page is closed still reach the chart', async () => {
+  const dom = fakeDom();
+  // A Firestore that never delivers anything: only the client's own in-memory points can show up.
+  const db = { collection: () => ({ doc: () => ({ onSnapshot: () => () => {}, get: async () => ({ exists: false }), set: async () => {} }) }) };
+  const controller = chart.create({ document: dom, getDb: () => db });
+  const now = Date.now();
+  const start = Math.floor(now / STEP) * STEP - 15 * 60000;
+  for (let i = 0; i < 150; i += 1) {
+    const at = start + i * STEP;
+    controller.recordTick('cryp', { previousAt: at - STEP, previousPrice: 1, now: at, price: 1 + i / 100 });
+  }
+  const stored = controller._maps.fine.cryp;
+  assert.equal(stored.size, 150, 'every tick is kept although the chart was never visible');
+  controller.setLiveRate('cryp', 2.5, now);
+  controller.setVisible(true);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(stored.size, 150);
+  const model = chart.buildModel(controller._maps, { cryp: { price: 2.5, at: now }, blue: null }, '1h', 'price', now, null);
+  const jumps = model.series.cryp.filter((p, i, a) => i && p.v !== a[i - 1].v).length;
+  assert.ok(jumps >= 149, 'the line follows the recorded rate instead of staying flat');
+  controller.stop();
+});

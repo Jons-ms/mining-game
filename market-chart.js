@@ -293,12 +293,25 @@
     const statusEl = $("chartStatus");
     const readoutEl = $("chartReadout");
 
+    // Drop points older than the stored retention (never the ones the 24 h chart or its anchor still needs).
+    function prune(store) {
+      const oldest = Date.now() - RETENTION_MS;
+      store.forEach((_, t) => { if (t < oldest) store.delete(t); });
+    }
+
     function ingest(kind, currency, data) {
       const store = maps[kind][currency];
       parseDocument(kind, data).forEach((p) => store.set(p.t, p.v));
-      // Drop points older than the stored retention (never the ones the 24 h chart or its anchor still needs).
-      const oldest = Date.now() - RETENTION_MS;
-      store.forEach((_, t) => { if (t < oldest) store.delete(t); });
+      prune(store);
+    }
+
+    // Keep this client's own points in memory the moment they are produced, whatever page is open. The Firestore
+    // listeners only run on the Exchange page, so without this the chart would miss everything that happened
+    // elsewhere in the game until the history is re-read. Points already known (from Firestore) are never replaced.
+    function keepLocally(kind, currency, write) {
+      const store = maps[kind][currency];
+      parseDocument(kind, write.data).forEach((p) => { if (!store.has(p.t)) store.set(p.t, p.v); });
+      prune(store);
     }
 
     function warnOnce(error) {
@@ -443,22 +456,26 @@
 
     // Called by the game right after a successful rate transaction; failures never affect the rate.
     function recordTick(currency, tick) {
+      if (!tick || !CURRENCIES.includes(currency)) return;
       const db = getDb();
-      if (!db || !tick) return;
       ["fine", "coarse"].forEach((kind) => {
         if (!startsNewStep(kind, tick.previousAt, tick.now)) return;
         const write = buildPointWrite(kind, currency, tick.now, tick.price);
+        keepLocally(kind, currency, write);
+        // First tick after a break: also keep the rate that was held through it. Best effort — if it cannot be
+        // stored (slot taken, document too old for the rules) the chart falls back to the nearest stored point.
+        const held = buildGapAnchorWrite(kind, currency, tick);
+        if (held) keepLocally(kind, currency, held);
+        if (!db) return;
         db.collection(COLLECTION).doc(write.id).set(write.data, { merge: true }).catch((error) => {
           if (!warned) {
             warned = true;
             console.warn("Не вдалося записати історію курсу:", error);
           }
         });
-        // First tick after a break: also keep the rate that was held through it. Best effort — if it cannot be
-        // stored (slot taken, document too old for the rules) the chart falls back to the nearest stored point.
-        const held = buildGapAnchorWrite(kind, currency, tick);
         if (held) db.collection(COLLECTION).doc(held.id).set(held.data, { merge: true }).catch(() => {});
       });
+      if (visible) scheduleRender();
     }
 
     function stop() {
