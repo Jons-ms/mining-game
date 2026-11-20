@@ -263,7 +263,7 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 
 
 /* Публічний рейтинг Подіум */
-.page-nav { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.page-nav { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .podium-table-wrap {
   margin-top: 16px;
   overflow-x: auto;
@@ -380,3 +380,31 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 @media (max-width: 430px) { .market-chart { padding: 10px; } .segmented button { padding: 6px 10px; } }
 .sell-switch { display: flex; width: 100%; max-width: 520px; margin-top: 14px; }
 .sell-switch button { flex: 1; }
+
+/* CRYP BANK (beta) */
+.bank-subtitle { margin: 4px 0 8px; font-size: 15px; color: var(--muted); }
+.bank-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin: 12px 0; }
+.bank-note { margin-top: 12px; }
+.bank-card { position: relative; display: flex; flex-direction: column; gap: 10px; min-height: 178px; padding: 16px 18px; border-radius: 16px; border: 1px solid rgba(255,255,255,.16); color: #fff; overflow: hidden; box-shadow: 0 8px 22px rgba(0,0,0,.35); }
+.bank-card::after { content: ""; position: absolute; right: -40px; top: -40px; width: 150px; height: 150px; border-radius: 50%; background: rgba(255,255,255,.07); pointer-events: none; }
+.bank-card-uah { background: linear-gradient(135deg, #0057b7 0%, #1d3f78 55%, #ffd500 175%); }
+.bank-card-cryp { background: linear-gradient(135deg, #0f5f48 0%, #183f36 60%, #80f0bd 190%); }
+.bank-card-blue { background: linear-gradient(135deg, #2c3fb8 0%, #1b2478 60%, #6fa8ff 190%); }
+.bank-card-top { display: flex; justify-content: space-between; align-items: center; font-size: 12px; font-weight: 800; letter-spacing: .08em; }
+.bank-card-code { padding: 3px 9px; border-radius: 99px; background: rgba(0,0,0,.28); }
+.bank-card-chip { width: 34px; height: 24px; border-radius: 5px; background: linear-gradient(135deg, #f3dc9a, #b98f35); }
+.bank-card-balance { display: grid; gap: 2px; }
+.bank-card-label { font-size: 11px; opacity: .75; }
+.bank-card-amount { font-size: clamp(20px, 5vw, 26px); overflow-wrap: anywhere; }
+.bank-card-number { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 16px; letter-spacing: .12em; }
+.bank-card-name { font-size: 12px; opacity: .8; }
+.bank-card-empty { background: var(--panel-soft); border-style: dashed; border-color: #39445c; box-shadow: none; }
+.bank-card-empty.bank-card-uah, .bank-card-empty.bank-card-cryp, .bank-card-empty.bank-card-blue { background: var(--panel-soft); }
+.bank-card-empty.bank-card-uah { border-color: #2d5fa8; }
+.bank-card-empty.bank-card-cryp { border-color: #2f6656; }
+.bank-card-empty.bank-card-blue { border-color: #4a5ad0; }
+.bank-card-note { margin: 0; color: var(--muted); font-size: 12px; }
+.bank-open-button { margin-top: auto; }
+.bank-open-button:disabled { opacity: .55; cursor: default; }
+@media (max-width: 760px) { .page-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 430px) { .page-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

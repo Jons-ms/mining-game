@@ -42,7 +42,8 @@
   <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js" defer></script>
   <script src="firebase-config.js?v=20261013-1" defer></script>
   <script src="market-chart.js?v=20261115-2" defer></script>
-  <script src="game.js?v=20261115-2" defer></script>
+  <script src="bank.js?v=20261119-1" defer></script>
+  <script src="game.js?v=20261119-1" defer></script>
 </head>
 <body>
 
@@ -85,6 +86,7 @@
       <button class="nav-button" type="button" data-page="exchange">Біржа</button>
       <button class="nav-button" type="button" data-page="shop">Магазин</button>
       <button class="nav-button" type="button" data-page="podium">Подіум</button>
+      <button class="nav-button" type="button" data-page="bank">Банк</button>
       <button class="nav-button" type="button" data-page="info">Інформація</button>
     </nav>
 
@@ -201,6 +203,16 @@
             </tbody>
           </table>
         </div>
+      </section>
+    </section>
+
+    <section class="page-section" id="page-bank" hidden>
+      <section class="panel">
+        <div class="section-heading"><h2>CRYP BANK <span class="status-pill">бета</span></h2></div>
+        <h3 class="bank-subtitle">Мої рахунки</h3>
+        <p class="small-note" id="bankStatus" role="status" aria-live="polite"></p>
+        <div class="bank-cards" id="bankCards"></div>
+        <p class="small-note bank-note">Картка показує твій поточний баланс у грі. Відкриття рахунку не змінює й не створює гроші.</p>
       </section>
     </section>
 

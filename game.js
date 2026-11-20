@@ -694,6 +694,7 @@
     const availableSlots = SLOT_COUNT + (state.hasExtraField ? state.extraUnlockedSlots.filter(Boolean).length : 0);
     els.gpuCount.textContent = allGPUs().length + " / " + availableSlots + " встановлено";
     els.price.textContent = marketReady ? money(marketState.price) : "—";
+    if (window.CrypBank) window.CrypBank.setBalances({ cash: state.cash, cryp: state.cryp, blue: state.blue });
     $("infoCash").textContent = money(state.cash);
     $("infoCryp").textContent = number(state.cryp) + " CRYP";
     $("infoRate").textContent = number(totalRate()) + " CRYP/с";
@@ -1496,6 +1497,7 @@
       stopBlueMarketSync();
       if (marketChart) marketChart.stop();
       stopPodiumSync();
+      if (window.CrypBank) window.CrypBank.stop();
       cloudSaveReady = false;
       clearTimeout(cloudSaveTimer);
 
@@ -1553,6 +1555,8 @@
         // Independent shared rates start in parallel; a Blue failure never blocks CRYP or the game.
         await Promise.all([startMarketSync(db, user.uid), startBlueMarketSync(db, user.uid)]);
         startPodiumSync(db, user.uid);
+        // CRYP BANK (beta) only reads the balances shown on the cards; it never changes the game state.
+        if (window.CrypBank && db) window.CrypBank.start(db, user.uid);
 
         if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
           state.playerName = user.displayName.slice(0, 20);
