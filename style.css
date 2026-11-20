@@ -395,8 +395,8 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
     radial-gradient(120% 90% at 100% 100%, var(--c3) 0%, transparent 58%),
     radial-gradient(90% 80% at 0% 0%, rgba(255, 255, 255, .22) 0%, transparent 55%),
     linear-gradient(135deg, var(--c1) 0%, var(--c2) 62%, var(--c2) 100%);
-  border: 1px solid rgba(255, 255, 255, .28);
-  box-shadow: 0 10px 24px var(--glow), 0 2px 0 rgba(255, 255, 255, .18) inset;
+  border: 0;
+  box-shadow: 0 10px 24px var(--glow);
 }
 /* holographic sheen: a wide rainbow-tinted band that slowly slides across the card */
 .bank-card::before {
@@ -404,19 +404,12 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
   background: linear-gradient(115deg, transparent 20%, rgba(255, 255, 255, .8) 32%, var(--s1) 40%, var(--s2) 48%, var(--s3) 56%, transparent 68%);
   background-size: 260% 100%; background-position: 40% 0;
 }
-/* liquid-glass edge: bright specular rim (strongest on top and left), soft inner glow and a glint in the top corner */
+/* gradient edge: a thin line that is bright at the top-left and bottom-right corners and fades along the sides */
 .bank-card::after {
-  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
-  background:
-    radial-gradient(55% 38% at 14% 0%, rgba(255, 255, 255, .34), transparent 70%),
-    linear-gradient(180deg, rgba(255, 255, 255, .09), transparent 42%);
-  box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, .34),
-    inset 0 2px 1px rgba(255, 255, 255, .6),
-    inset 2px 0 2px -1px rgba(255, 255, 255, .42),
-    inset -2px 0 2px -1px rgba(255, 255, 255, .22),
-    inset 0 -2px 3px rgba(255, 255, 255, .26),
-    inset 0 0 20px rgba(255, 255, 255, .13);
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit; padding: 1.5px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, .9), rgba(255, 255, 255, .05) 38%, rgba(255, 255, 255, .05) 62%, rgba(255, 255, 255, .65));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
 }
 
 .bank-card-uah  { --c1: #0a3586; --c2: #2f7fe8; --c3: #ffd21f; --glow: rgba(47, 127, 232, .5); --s1: rgba(150, 205, 255, .6); --s2: rgba(255, 232, 120, .65); --s3: rgba(255, 255, 255, .3); }
@@ -435,7 +428,7 @@ footer { color: #69758b; font-size: 10px; margin-top: 22px; justify-content: fle
 /* not opened yet: a frosted outline card tinted in the currency colour */
 .bank-card-empty { color: var(--text); text-shadow: none; background: linear-gradient(135deg, color-mix(in srgb, var(--c2) 18%, transparent), color-mix(in srgb, var(--c3) 10%, transparent)), var(--panel-soft); border: 1px dashed color-mix(in srgb, var(--c2) 70%, #fff 0%); box-shadow: none; }
 .bank-card-empty::before { opacity: .22; }
-.bank-card-empty::after { box-shadow: inset 0 1px 1px rgba(255, 255, 255, .22), inset 0 0 14px rgba(255, 255, 255, .05); }
+.bank-card-empty::after { content: none; }
 .bank-card-empty .bank-card-code { background: color-mix(in srgb, var(--c2) 28%, transparent); border-color: color-mix(in srgb, var(--c2) 60%, transparent); }
 .bank-card-note { margin: 0; color: var(--muted); font-size: 12px; }
 .bank-open-button { margin-top: auto; }
