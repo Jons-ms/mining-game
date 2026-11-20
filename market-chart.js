@@ -39,6 +39,8 @@
   // Two stored points further apart than this many storage steps mean nobody was in the game: the rate held its value.
   const GAP_STEPS = 3;
   const PERIOD_OF_KIND = { fine: "1h", coarse: "24h" };
+  // This many rejected point writes in a row mean the history is not being stored (usually outdated Firestore rules).
+  const WRITE_FAILURE_LIMIT = 3;
 
   // ---------- Pure helpers (covered by tests) ----------
 
@@ -284,6 +286,9 @@
     let subscribedDay = null;
     let renderQueued = false;
     let historyError = false;
+    // Consecutive rejected point writes per storage kind. Writing never depends on the Exchange page being open, so a
+    // failure here is otherwise invisible: the player only notices later that the chart has holes.
+    const writeFailures = { fine: 0, coarse: 0 };
     let warned = false;
     let hoverX = null;
     let lastRenderBucket = 0;
@@ -448,11 +453,17 @@
       ["fine", "coarse"].forEach((kind) => {
         if (!startsNewStep(kind, tick.previousAt, tick.now)) return;
         const write = buildPointWrite(kind, currency, tick.now, tick.price);
-        db.collection(COLLECTION).doc(write.id).set(write.data, { merge: true }).catch((error) => {
+        db.collection(COLLECTION).doc(write.id).set(write.data, { merge: true }).then(() => {
+          const hadFailed = writeFailures[kind] >= WRITE_FAILURE_LIMIT;
+          writeFailures[kind] = 0;
+          if (hadFailed) scheduleRender();
+        }).catch((error) => {
+          writeFailures[kind] += 1;
           if (!warned) {
             warned = true;
             console.warn("Не вдалося записати історію курсу:", error);
           }
+          if (writeFailures[kind] === WRITE_FAILURE_LIMIT) scheduleRender();
         });
         // First tick after a break: also keep the rate that was held through it. Best effort — if it cannot be
         // stored (slot taken, document too old for the rules) the chart falls back to the nearest stored point.
@@ -472,6 +483,8 @@
       live.cryp = null;
       live.blue = null;
       historyError = false;
+      writeFailures.fine = 0;
+      writeFailures.coarse = 0;
     }
 
     function scheduleRender() {
@@ -521,8 +534,10 @@
 
       const pointCount = Math.max(model.raw.cryp.length, model.raw.blue.length);
       if (statusEl) {
+        const writeFailing = writeFailures.fine >= WRITE_FAILURE_LIMIT || writeFailures.coarse >= WRITE_FAILURE_LIMIT;
         statusEl.textContent = historyError
           ? "Історія курсів недоступна — перевір правила Firestore."
+          : writeFailing ? "Нові точки історії не записуються — опублікуй актуальний firestore.rules у Firebase Console."
           : pointCount < 3 ? "Історія ще накопичується: графік поповнюється разом зі зміною курсу." : "";
       }
 

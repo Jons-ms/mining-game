@@ -354,3 +354,60 @@ test('time axis marks: every 10 minutes for the 1-hour chart, aligned to the loc
   });
   assert.equal(chart.formatTimeSeconds(new Date(2026, 10, 17, 9, 5, 7).getTime()), '09:05:07');
 });
+
+test('history is stored while the Exchange page is closed, and is all there when it is opened', async () => {
+  const docs = {};
+  const { db } = sharedHistoryDb(docs);
+  const dom = fakeDom();
+  const controller = chart.create({ document: dom, getDb: () => db });   // never made visible: the player is on another page
+  const base = Math.floor(Date.now() / HOUR) * HOUR;
+  const ticks = 20;
+  for (let i = 0; i < ticks; i++) {
+    const now = base + 10 * STEP + i * STEP;
+    ['cryp', 'blue'].forEach((cur) => controller.recordTick(cur, { previousAt: now - STEP, now, price: cur === 'cryp' ? 2 + i / 100 : 8 + i / 100 }));
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  ['cryp', 'blue'].forEach((cur) => {
+    const points = chart.parseDocument('fine', docs[`h-${cur}-${Math.floor(base / HOUR)}`]);
+    assert.equal(points.length, ticks, `${cur}: one point per tick although the chart was never visible`);
+  });
+
+  controller.setVisible(true);                                             // the player opens the Exchange
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(controller._maps.fine.cryp.size, ticks, 'the chart loads every point stored in the meantime');
+  assert.equal(controller._maps.fine.blue.size, ticks);
+  controller.stop();
+});
+
+test('rejected history writes are reported on the Exchange after three in a row and cleared by the next success', async () => {
+  const dom = fakeDom();
+  let reject = true;
+  const db = {
+    collection: () => ({
+      doc: () => ({
+        onSnapshot: () => () => {},
+        get: async () => ({ exists: false }),
+        set: async () => { if (reject) throw new Error('permission-denied'); }
+      })
+    })
+  };
+  const controller = chart.create({ document: dom, getDb: () => db });
+  controller.setVisible(true);
+  const status = () => dom.byId.get('chartStatus').textContent;
+  const base = Math.floor(Date.now() / HOUR) * HOUR + 10 * STEP;
+  const tick = (i) => controller.recordTick('cryp', { previousAt: base + i * STEP - STEP, now: base + i * STEP, price: 2 });
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  tick(0); tick(1);
+  await settle();
+  assert.doesNotMatch(status(), /не записуються/, 'two failures are not reported yet');
+  tick(2);
+  await settle();
+  assert.match(status(), /Нові точки історії не записуються/, 'the third failure in a row is reported');
+
+  reject = false;
+  tick(3);
+  await settle();
+  assert.doesNotMatch(status(), /не записуються/, 'a successful write clears the message');
+  controller.stop();
+});
