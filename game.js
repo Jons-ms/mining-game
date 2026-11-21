@@ -3,9 +3,6 @@
 
   let SAVE_KEY = null;
   let currentUserUID = null;
-  let cloudSaveReady = false;
-  let cloudSaveTimer = null;
-  let cloudSaveInProgress = Promise.resolve();
   const SLOT_COUNT = 16;
   const FIELD_PRICE = 5000;
   const FIELD_CELL_PRICE = 10000;
@@ -252,33 +249,15 @@
     try { if (marketHistoryRecorder && tickResult) marketHistoryRecorder.recordTick(currency, tickResult); } catch (error) { console.warn("Історія курсу:", error); }
   }
   // Cloud writes are expensive (Firestore daily quota), so periodic saves are throttled and skipped when nothing changed.
-  const CLOUD_SAVE_PERIODIC_INTERVAL = 30000;
   // A shared rate timestamp further in the future than this is treated as poisoned by a wrong device clock.
   const MAX_CLOCK_SKEW_MS = 60000;
-  let lastCloudSaveAt = 0;
-  let lastCloudSaveSignature = "";
   let podiumUnsubscribe = null;
-  let podiumPublishTimer = null;
-  let podiumProfiles = [];
+  let podiumEntries = [];
+  let podiumUpdatedAtValue = null;
   let podiumRenderKey = "";
-  let lastPodiumPublishAt = 0;
-  let lastPodiumPublishSignature = "";
 
+  // Progress lives on the server. The local state is only what is shown until the server answers.
   function loadState() {
-    try {
-      const saved = SAVE_KEY ? JSON.parse(localStorage.getItem(SAVE_KEY)) : null;
-      if (saved && Array.isArray(saved.slots)) {
-        const state = normalizeSavedState(saved);
-        // Older local saves may contain a device-specific rate; the shared Firestore market is authoritative.
-        delete state.price;
-        delete state.lastPriceAt;
-        delete state.trendDirection;
-        delete state.trendTicksLeft;
-        return state;
-      }
-    } catch (error) {
-      console.warn("Не вдалося завантажити збереження:", error);
-    }
     return newState();
   }
 
@@ -312,58 +291,103 @@
     return allGPUs().reduce((sum, gpu) => sum + (gpu.currency === currency ? (gpu.rate || 0) : 0), 0);
   }
 
-  function stateSignature() {
-    return JSON.stringify({ ...state, savedAt: 0 });
-  }
-
   // save() always writes locally. Cloud writes happen shortly after player actions; the
   // once-per-5-seconds timer passes { periodic: true }, which is throttled and skips unchanged state.
-  function save(options = {}) {
-    if (!SAVE_KEY) return;
+  // The browser no longer stores or writes progress: balances live in Firestore and change only through
+  // Cloud Functions. Kept as a no-op so older call sites stay harmless.
+  function save() {}
 
-    try {
-      state.savedAt = Date.now();
-      localStorage.setItem(SAVE_KEY, JSON.stringify(state));
-      if (!cloudSaveReady || !currentUserUID || !window.crypFirebase?.db) {
-        els.saveStatus.textContent = "Збережено на цьому пристрої";
-        return;
-      }
+  // ---- Server-authoritative game: every change goes through Cloud Functions. ----
+  const HEARTBEAT_INTERVAL_MS = 60000;
+  let actionBusy = false;
+  let stateEpoch = 0;
+  let heartbeatTimer = null;
+  let serverReady = false;
 
-      if (options.periodic) {
-        if (Date.now() - lastCloudSaveAt < CLOUD_SAVE_PERIODIC_INTERVAL) return;
-        if (stateSignature() === lastCloudSaveSignature) return;
-      }
+  function functionsClient() {
+    return window.crypFirebase && window.crypFirebase.functions ? window.crypFirebase.functions : null;
+  }
 
-      clearTimeout(cloudSaveTimer);
-      cloudSaveTimer = setTimeout(() => {
-        const uid = currentUserUID;
-        const stateToSave = JSON.parse(JSON.stringify(state));
-        const signature = stateSignature();
-        cloudSaveInProgress = cloudSaveInProgress
-          .catch(() => {})
-          .then(() => {
-            if (uid !== currentUserUID || !cloudSaveReady) return;
-            return window.crypFirebase.db.collection("players").doc(uid).set({
-              ...stateToSave,
-              updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-            }).then(() => {
-              if (uid === currentUserUID) {
-                lastCloudSaveAt = Date.now();
-                lastCloudSaveSignature = signature;
-                els.saveStatus.textContent = "";
-                queuePodiumPublish(window.crypFirebase.db, uid);
-              }
-            });
-          })
-          .catch((error) => {
-            console.error("Помилка хмарного збереження:", error);
-            if (uid === currentUserUID) els.saveStatus.textContent = "Хмарне збереження не працює — перевір правила Firestore";
-          });
-      }, 500);
-    } catch (error) {
-      console.error("Не вдалося зберегти:", error);
-      els.saveStatus.textContent = "Не вдалося зберегти";
+  function makeOpId() {
+    const random = window.crypto && window.crypto.getRandomValues
+      ? Array.from(window.crypto.getRandomValues(new Uint32Array(3)), (n) => n.toString(36)).join("")
+      : Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+    return ("op" + Date.now().toString(36) + random).slice(0, 60);
+  }
+
+  // Replaces the local view with the server's state. Local mining counters are only an animation between syncs.
+  function applyServerState(data) {
+    if (!data || !data.state || !Array.isArray(data.state.slots)) return;
+    state = normalizeSavedState(data.state);
+    stateEpoch += 1;
+    render();
+  }
+
+  function isRetryableError(error) {
+    return !error || ["unavailable", "deadline-exceeded", "internal", "unknown"].includes(String(error.code || "").replace("functions/", ""));
+  }
+
+  function errorMessage(error) {
+    const code = String((error && error.code) || "").replace("functions/", "");
+    if (code === "unavailable" || code === "deadline-exceeded" || !code) return "Немає зв'язку із сервером. Спробуй ще раз.";
+    return (error && error.message) || "Операція не виконана.";
+  }
+
+  // Sends one action. The same opId is reused on a retry, so a lost response can never apply an action twice.
+  async function serverAction(type, payload = {}) {
+    const functions = functionsClient();
+    if (!functions || !serverReady) {
+      showToast("Сервер ще не підключений. Спробуй за кілька секунд.");
+      return null;
     }
+    if (actionBusy) {
+      showToast("Зачекай, попередня операція ще виконується.");
+      return null;
+    }
+    actionBusy = true;
+    const call = functions.httpsCallable("gameAction");
+    const request = { type, payload, opId: makeOpId() };
+    try {
+      let response;
+      try {
+        response = await call(request);
+      } catch (error) {
+        if (!isRetryableError(error)) throw error;
+        response = await call(request);
+      }
+      applyServerState(response.data);
+      return response.data;
+    } catch (error) {
+      console.error("Серверна операція не виконана:", error);
+      showToast(errorMessage(error));
+      return null;
+    } finally {
+      actionBusy = false;
+    }
+  }
+
+  async function sendHeartbeat(force = false) {
+    const functions = functionsClient();
+    if (!functions || !serverReady || (document.hidden && !force) || actionBusy) return;
+    const epoch = stateEpoch;
+    try {
+      const response = await functions.httpsCallable("heartbeat")({});
+      // An action finished while this request was in flight: its state is newer, keep it.
+      if (epoch === stateEpoch && !actionBusy) applyServerState(response.data);
+    } catch (error) {
+      console.warn("Heartbeat не виконано:", error);
+    }
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    serverReady = false;
   }
 
   function showToast(message) {
@@ -737,43 +761,11 @@
   function stopPodiumSync() {
     if (podiumUnsubscribe) podiumUnsubscribe();
     podiumUnsubscribe = null;
-    if (podiumPublishTimer) clearTimeout(podiumPublishTimer);
-    podiumPublishTimer = null;
-    podiumProfiles = [];
+    podiumEntries = [];
+    podiumUpdatedAtValue = null;
     podiumRenderKey = "";
   }
 
-  function queuePodiumPublish(db, expectedUID) {
-    if (!db || !expectedUID || expectedUID !== currentUserUID || !cloudSaveReady) return;
-    if (podiumPublishTimer) return;
-
-    const delay = Math.max(0, 60000 - (Date.now() - lastPodiumPublishAt));
-    podiumPublishTimer = setTimeout(async () => {
-      podiumPublishTimer = null;
-      if (expectedUID !== currentUserUID || !cloudSaveReady) return;
-
-      const profile = {
-        nickname: String(state.playerName || "Гравець").trim().slice(0, 20) || "Гравець",
-        cashBalance: Math.max(0, Number(state.cash) || 0),
-        crypBalance: Math.max(0, Number(state.cryp) || 0),
-        blueBalance: Math.max(0, Number(state.blue) || 0)
-      };
-      const signature = JSON.stringify(profile);
-      if (signature === lastPodiumPublishSignature) return;
-
-      try {
-        await db.collection("podiumPlayers").doc(expectedUID).set({
-          ...profile,
-          updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-        });
-        lastPodiumPublishSignature = signature;
-        lastPodiumPublishAt = Date.now();
-      } catch (error) {
-        console.error("Не вдалося оновити публічний рядок Подіуму:", error);
-        if (els.podiumStatus) els.podiumStatus.textContent = "Не вдалося оновити рейтинг — перевір правила Firestore.";
-      }
-    }, delay);
-  }
 
   function formatPodiumUpdatedAt(timestamp) {
     if (!timestamp) return "—";
@@ -787,31 +779,17 @@
     }).format(date);
   }
 
+  // The Podium is an hourly server snapshot (podium/current): the browser only reads and shows it.
   function renderPodium() {
     if (!els.podiumRows) return;
-    // The ranking needs only the CRYP rate. If the Blue rate is unavailable (outage, rules not yet published),
-    // Blue is valued at its minimum rate instead of hiding the whole ranking.
-    if (!marketReady) {
-      renderPodiumMessage("Завантажуємо поточний курс CRYP…");
-      if (els.podiumStatus) els.podiumStatus.textContent = "Завантажуємо поточний курс CRYP…";
-      return;
-    }
-    const currentRate = marketState.price;
-    const currentBlueRate = blueMarketReady ? blueMarketState.price : BLUE_MIN_PRICE;
-    const entries = podiumProfiles.map((profile) => {
-      const cashBalance = Math.max(0, Number(profile.cashBalance) || 0);
-      const crypBalance = Math.max(0, Number(profile.crypBalance) || 0);
-      const blueBalance = Math.max(0, Number(profile.blueBalance) || 0);
-      return {
-        nickname: String(profile.nickname || "Гравець").slice(0, 20),
-        cashBalance,
-        totalCapital: cashBalance + crypBalance * currentRate + blueBalance * currentBlueRate,
-        updatedAt: profile.updatedAt
-      };
-    }).sort((a, b) => b.totalCapital - a.totalCapital || a.nickname.localeCompare(b.nickname, "uk")).slice(0, 10);
+    const entries = podiumEntries.slice(0, 10).map((entry) => ({
+      nickname: String(entry.nickname || "Гравець").slice(0, 20),
+      cashBalance: Math.max(0, Number(entry.cashBalance) || 0),
+      totalCapital: Math.max(0, Number(entry.totalCapital) || 0)
+    }));
 
     if (!entries.length) {
-      renderPodiumMessage("Рейтинг з’явиться, коли гравці зайдуть у гру.");
+      renderPodiumMessage("Рейтинг з’явиться після наступного погодинного оновлення.");
     } else {
       // Rebuild the table only when its visible content changed (render runs every second).
       const key = "rows:" + JSON.stringify(entries.map((entry) => [entry.nickname, money(entry.cashBalance), money(entry.totalCapital)]));
@@ -834,23 +812,24 @@
       }
     }
 
-    const latest = entries.map((entry) => entry.updatedAt)
-      .filter((value) => value && typeof value.toMillis === "function")
-      .sort((a, b) => b.toMillis() - a.toMillis())[0] || null;
+    const latest = podiumUpdatedAtValue && typeof podiumUpdatedAtValue.toMillis === "function" ? podiumUpdatedAtValue : null;
     els.podiumUpdatedAt.textContent = formatPodiumUpdatedAt(latest);
     els.podiumUpdatedAt.dateTime = latest && typeof latest.toDate === "function" ? latest.toDate().toISOString() : "";
-    els.podiumStatus.textContent = blueMarketReady ? "" : "Курс Blue тимчасово недоступний: Blue враховано за мінімальним курсом.";
+    els.podiumStatus.textContent = "";
   }
 
   function startPodiumSync(db, expectedUID) {
     stopPodiumSync();
     if (!db || expectedUID !== currentUserUID) return;
     els.podiumStatus.textContent = "Завантажуємо рейтинг…";
-    renderPodiumMessage("Рейтинг з’явиться, коли гравці зайдуть у гру.");
+    renderPodiumMessage("Рейтинг з’явиться після наступного погодинного оновлення.");
 
-    podiumUnsubscribe = db.collection("podiumPlayers").onSnapshot((snapshot) => {
+    // One document, one read per hourly change.
+    podiumUnsubscribe = db.collection("podium").doc("current").onSnapshot((snapshot) => {
       if (expectedUID !== currentUserUID) return;
-      podiumProfiles = snapshot.docs.map((doc) => doc.data() || {});
+      const data = snapshot.exists ? snapshot.data() : null;
+      podiumEntries = data && Array.isArray(data.entries) ? data.entries : [];
+      podiumUpdatedAtValue = data ? data.updatedAt : null;
       renderPodium();
     }, (error) => {
       if (expectedUID !== currentUserUID) return;
@@ -1010,53 +989,34 @@
     });
   }
 
-  function purchaseGPU(gpuType) {
+  async function purchaseGPU(gpuType) {
     if (state.cash < gpuType.price) {
       showToast("Недостатньо гривень для цієї відеокарти.");
       return;
     }
-    state.cash -= gpuType.price;
-    state.inventory.push({
-      inventoryId: String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8),
-      id: gpuType.id,
-      name: gpuType.name,
-      icon: gpuType.icon,
-      rate: gpuType.rate,
-      currency: gpuType.currency,
-      cost: gpuType.price
-    });
-    render();
-    save();
-    showToast(gpuType.name + " додано в інвентар.");
+    if (await serverAction("buyGpu", { gpuId: gpuType.id })) showToast(gpuType.name + " додано в інвентар.");
   }
 
-  function purchaseExtraField() {
+  async function purchaseExtraField() {
     if (state.hasExtraField) return;
     if (state.cash < FIELD_PRICE) {
       showToast("Для нового поля потрібно " + money(FIELD_PRICE) + ".");
       return;
     }
-    state.cash -= FIELD_PRICE;
-    state.hasExtraField = true;
-    state.extraSlots = Array.from({ length: SLOT_COUNT }, (_, index) => state.extraSlots[index] || null);
-    state.extraUnlockedSlots = Array.from({ length: SLOT_COUNT }, (_, index) => index < INITIAL_EXTRA_UNLOCKED);
-    activeFarm = 0;
-    render();
-    save();
-    showToast("Додаткове поле придбано. Проведи вліво у Фермі, щоб перейти до нього.");
+    if (await serverAction("buyExtraField")) {
+      activeFarm = 0;
+      render();
+      showToast("Додаткове поле придбано. Проведи вліво у Фермі, щоб перейти до нього.");
+    }
   }
 
-  function purchaseExtraCell(index) {
+  async function purchaseExtraCell(index) {
     if (!state.hasExtraField || state.extraUnlockedSlots[index]) return;
     if (state.cash < FIELD_CELL_PRICE) {
       showToast("Для клітинки потрібно " + money(FIELD_CELL_PRICE) + ".");
       return;
     }
-    state.cash -= FIELD_CELL_PRICE;
-    state.extraUnlockedSlots[index] = true;
-    render();
-    save();
-    showToast("Клітинку " + (index + 1) + " відкрито.");
+    if (await serverAction("buyExtraCell", { index })) showToast("Клітинку " + (index + 1) + " відкрито.");
   }
 
   function openGPUActions(slotIndex) {
@@ -1074,49 +1034,34 @@
     actionSlotIndex = null;
   }
 
-  function removeGPUFromFarm() {
+  async function removeGPUFromFarm() {
     if (actionSlotIndex === null) return;
     const slotIndex = actionSlotIndex;
-    const slots = activeFarmSlots();
-    const gpu = slots[slotIndex];
+    const gpu = activeFarmSlots()[slotIndex];
     if (!gpu) {
       closeGPUActions();
       return;
     }
-
-    state.inventory.push({
-      inventoryId: String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8),
-      id: gpu.id,
-      name: gpu.name,
-      icon: gpu.icon || "▰",
-      rate: gpu.rate || 0,
-      currency: gpu.currency || "cryp",
-      cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0)
-    });
-    slots[slotIndex] = null;
     closeGPUActions();
-    render();
-    save();
-    showToast(gpu.name + " знято з ферми та повернуто в інвентар.");
+    if (await serverAction("removeGpu", { field: activeFarm, index: slotIndex })) {
+      showToast(gpu.name + " знято з ферми та повернуто в інвентар.");
+    }
   }
 
-  function sellGPUFromFarm() {
+  async function sellGPUFromFarm() {
     if (actionSlotIndex === null) return;
     const slotIndex = actionSlotIndex;
-    const slots = activeFarmSlots();
-    const gpu = slots[slotIndex];
+    const gpu = activeFarmSlots()[slotIndex];
     if (!gpu) {
       closeGPUActions();
       return;
     }
     const originalCost = Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0);
     const resalePrice = originalCost * 0.5;
-    state.cash += resalePrice;
-    slots[slotIndex] = null;
     closeGPUActions();
-    render();
-    save();
-    showToast(gpu.name + " продано за " + money(resalePrice) + " (50% від собівартості).");
+    if (await serverAction("sellGpu", { field: activeFarm, index: slotIndex })) {
+      showToast(gpu.name + " продано за " + money(resalePrice) + " (50% від собівартості).");
+    }
   }
 
   function openInventory(slotIndex) {
@@ -1131,21 +1076,20 @@
     targetSlotIndex = null;
   }
 
-  function installInventoryGPU(inventoryId) {
+  async function installInventoryGPU(inventoryId) {
     const slots = activeFarmSlots();
     if (targetSlotIndex === null || slots[targetSlotIndex]) {
       closeInventory();
       return;
     }
-    const inventoryIndex = state.inventory.findIndex((gpu) => gpu.inventoryId === inventoryId);
-    if (inventoryIndex < 0) return;
-    const gpu = state.inventory.splice(inventoryIndex, 1)[0];
-    slots[targetSlotIndex] = { id: gpu.id, name: gpu.name, icon: gpu.icon, rate: gpu.rate, currency: gpu.currency || "cryp", cost: Number(gpu.cost) || (GPU_TYPES.find((type) => type.id === gpu.id)?.price ?? 0) };
+    const gpu = state.inventory.find((item) => item.inventoryId === inventoryId);
+    if (!gpu) return;
+    const slotIndex = targetSlotIndex;
     const installedName = gpu.name;
     closeInventory();
-    render();
-    save();
-    showToast(installedName + " встановлено на ферму.");
+    if (await serverAction("installGpu", { field: activeFarm, index: slotIndex, inventoryId })) {
+      showToast(installedName + " встановлено на ферму.");
+    }
   }
 
   const CRYP_DISPLAY_DIGITS = 3;
@@ -1211,13 +1155,13 @@
     updateSellPreview();
   }
 
-  function sellCurrency(currency) {
+  async function sellCurrency(currency, all = false) {
     const info = sellInfo(currency);
     if (!info.ready) {
       showToast(info.notReady);
       return;
     }
-    const result = resolveSellAmount(parseAmount(els.sellAmount.value), info.balance, info.digits);
+    const result = resolveSellAmount(all ? info.balance : parseAmount(els.sellAmount.value), info.balance, info.digits);
     if (result.status === "empty") {
       showToast("Введи кількість " + info.name + ", яку хочеш продати.");
       return;
@@ -1226,15 +1170,12 @@
       showToast("У тебе недостатньо " + info.name + " для цієї операції.");
       return;
     }
-    const amount = result.amount;
-    const proceeds = amount * info.price;
-    if (currency === "blue") state.blue = Math.max(0, state.blue - amount);
-    else state.cryp = Math.max(0, state.cryp - amount);
-    state.cash += proceeds;
+    // The server sells at the shared rate it reads itself; the amount is the only thing the browser sends.
+    const cashBefore = state.cash;
+    const done = await serverAction("sellCurrency", all ? { currency, all: true } : { currency, amount: result.amount });
+    if (!done) return;
     els.sellAmount.value = "";
-    render();
-    save();
-    showToast("Продано " + number(amount, info.digits) + " " + info.name + " за " + money(proceeds) + ".");
+    showToast("Продано " + number(result.amount, info.digits) + " " + info.name + " за " + money(state.cash - cashBefore) + ".");
   }
 
   const sellCRYP = () => sellCurrency("cryp");
@@ -1275,7 +1216,6 @@
     updateBluePrice(now);
     if (marketChart) marketChart.tick(now);
     renderStats();
-    if (Math.floor(now / 5000) !== Math.floor((now - 1000) / 5000)) save({ periodic: true });
   }
 
   document.addEventListener("visibilitychange", () => {
@@ -1283,6 +1223,7 @@
     if (document.hidden) {
       hiddenAt = now;
       lastVisibleTick = null;
+      sendHeartbeat(true); // best effort: the server credits mining up to this moment
     } else {
       if (hiddenAt !== null) {
         const hiddenSeconds = Math.max(0, (now - hiddenAt) / 1000);
@@ -1293,7 +1234,7 @@
       updatePrice(now);
       updateBluePrice(now);
       render();
-      save();
+      sendHeartbeat(); // the server decides how much of the break counts (60 s rule, server clock)
     }
   });
 
@@ -1360,15 +1301,15 @@
     const info = sellInfo(sellCurrencyChoice);
     els.sellAmount.value = info.balance > 0 ? String(info.balance) : "";
     updateSellPreview();
-    if (info.balance > 0) sellCurrency(sellCurrencyChoice);
+    if (info.balance > 0) sellCurrency(sellCurrencyChoice, true);
     else showToast("Поки що немає " + info.name + " для продажу.");
   });
 
   els.playerName.value = state.playerName;
   els.playerName.addEventListener("change", () => {
-    state.playerName = els.playerName.value.trim().slice(0, 20) || "Гравець 1";
-    els.playerName.value = state.playerName;
-    save();
+    const name = els.playerName.value.trim().slice(0, 20) || "Гравець 1";
+    els.playerName.value = name;
+    serverAction("setPlayerName", { name }).then(() => { els.playerName.value = state.playerName; });
   });
 
   // Firebase Authentication: local saves are separated by Firebase UID.
@@ -1508,8 +1449,7 @@
       if (marketHistoryRecorder) marketHistoryRecorder.reset();
       stopPodiumSync();
       if (window.CrypBank) window.CrypBank.stop();
-      cloudSaveReady = false;
-      clearTimeout(cloudSaveTimer);
+      stopHeartbeat();
 
       if (!user) {
 
@@ -1524,43 +1464,19 @@
       try {
         currentUserUID = user.uid;
         SAVE_KEY = "cryp-mining-v01-" + user.uid;
-        lastCloudSaveAt = 0;
-        lastCloudSaveSignature = "";
         state = loadState();
 
         const db = firebase.db;
-        if (db) {
-          const playerRef = db.collection("players").doc(user.uid);
-          try {
-            const snapshot = await playerRef.get();
-            if (snapshot.exists) {
-              const remote = snapshot.data();
-              // The newer save wins. A local save that never reached the cloud (offline, failed write)
-              // must not be overwritten by an older cloud copy. Saves without a timestamp count as oldest.
-              const localSavedAt = Number(state.savedAt) || 0;
-              const remoteSavedAt = remote && Number(remote.savedAt) || 0;
-              if (remote && Array.isArray(remote.slots) && !(localSavedAt > remoteSavedAt)) {
-                state = normalizeSavedState(remote);
-                delete state.price;
-                delete state.lastPriceAt;
-                delete state.trendDirection;
-                delete state.trendTicksLeft;
-                localStorage.setItem(SAVE_KEY, JSON.stringify(state));
-              }
-            } else {
-              // First login on a device uploads its existing local save instead of discarding it.
-              const firstCloudSave = { ...state };
-              await playerRef.set({
-                ...firstCloudSave,
-                updatedAt: window.firebase.firestore.FieldValue.serverTimestamp()
-              });
-            }
-            cloudSaveReady = true;
-          } catch (cloudError) {
-            console.error("Не вдалося завантажити/створити хмарне збереження:", cloudError);
-            els.saveStatus.textContent = "Не вдалося підключити хмарне збереження — перевір правила Firestore";
-          }
-        }
+        const functions = firebase.functions;
+        if (!functions) throw new Error("Cloud Functions недоступні");
+        // The server creates the player (490 UAH) or returns the saved one. A pre-migration local save is sent only
+        // once so the server can use it for an account that was not migrated yet; it is never deleted here.
+        let legacySave = null;
+        try { legacySave = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (error) { legacySave = null; }
+        const init = await functions.httpsCallable("initPlayer")(legacySave && Array.isArray(legacySave.slots) ? { legacySave } : {});
+        applyServerState(init.data);
+        serverReady = true;
+        startHeartbeat();
 
         // Independent shared rates start in parallel; a Blue failure never blocks CRYP or the game.
         await Promise.all([startMarketSync(db, user.uid), startBlueMarketSync(db, user.uid)]);
@@ -1568,23 +1484,17 @@
         // CRYP BANK (beta) only reads the balances shown on the cards; it never changes the game state.
         if (window.CrypBank && db) window.CrypBank.start(db, user.uid);
 
-        if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
-          state.playerName = user.displayName.slice(0, 20);
-        }
         els.playerName.value = state.playerName;
         render();
+        if (user.displayName && (!state.playerName || state.playerName === "Гравець 1")) {
+          serverAction("setPlayerName", { name: user.displayName.slice(0, 20) }).then(() => { els.playerName.value = state.playerName; });
+        }
 
         authScreen.hidden = true;
         gameApp.hidden = false;
         if (signOutButton) signOutButton.hidden = false;
         syncChartVisibility();
-        if (cloudSaveReady) {
-          els.saveStatus.textContent = "Хмарне збереження підключено";
-          save();
-        } else {
-          els.saveStatus.textContent = "Локальне збереження; хмара не підключена";
-          save();
-        }
+        els.saveStatus.textContent = "Прогрес зберігається на сервері";
       } catch (error) {
         console.error("Не вдалося відкрити гру після входу:", error);
 

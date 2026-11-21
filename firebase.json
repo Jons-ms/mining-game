@@ -1,5 +1,15 @@
 {
   "firestore": {
     "rules": "firestore.rules"
+  },
+  "functions": {
+    "source": "functions",
+    "codebase": "default",
+    "ignore": [
+      "node_modules",
+      ".git",
+      "test",
+      "*.log"
+    ]
   }
 }

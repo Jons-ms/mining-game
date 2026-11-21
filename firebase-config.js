@@ -29,7 +29,9 @@
       ready: true,
       app,
       auth: window.firebase.auth(),
-      db: window.firebase.firestore()
+      db: window.firebase.firestore(),
+      // Cloud Functions run the game logic; the region must match functions/index.js.
+      functions: window.firebase.functions ? app.functions("europe-west1") : null
     };
     console.info("Firebase ініціалізовано для CRYP Mining Game.");
   } catch (error) {
