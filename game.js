@@ -223,24 +223,33 @@
   let blueMarketUnsubscribe = null;
   let blueMarketReady = false;
   let blueMarketUpdateInProgress = false;
-  // Shared rate-history chart (market-chart.js). It only displays history and never touches the rates themselves.
-  const marketChart = window.CrypChart
+  // Market history writes are independent from the page-scoped chart reader.
+  const getMarketDb = () => (window.crypFirebase && window.crypFirebase.db) || null;
+  let marketChart = null;
+  const marketHistoryRecorder = window.CrypMarketHistory
+    ? window.CrypMarketHistory.createHistoryRecorder({
+      getDb: getMarketDb,
+      onChange: () => { if (marketChart) marketChart.render(); }
+    })
+    : null;
+  marketChart = window.CrypChart
     ? window.CrypChart.create({
       document,
-      getDb: () => (window.crypFirebase && window.crypFirebase.db) || null,
+      getDb: getMarketDb,
+      historyRecorder: marketHistoryRecorder,
       documentId: () => {
         const fieldPath = window.firebase && window.firebase.firestore && window.firebase.firestore.FieldPath;
         return fieldPath ? fieldPath.documentId() : null;
       }
     })
     : null;
-  // The chart listens to Firestore only while the Exchange page is open; it has to be re-armed after a new sign-in too.
+  // Only chart reads and rendering follow page visibility.
   let currentPageName = "farm";
   function syncChartVisibility() {
     if (marketChart) marketChart.setVisible(currentPageName === "exchange");
   }
   function recordHistoryTick(currency, tickResult) {
-    try { if (marketChart && tickResult) marketChart.recordTick(currency, tickResult); } catch (error) { console.warn("Історія курсу:", error); }
+    try { if (marketHistoryRecorder && tickResult) marketHistoryRecorder.recordTick(currency, tickResult); } catch (error) { console.warn("Історія курсу:", error); }
   }
   // Cloud writes are expensive (Firestore daily quota), so periodic saves are throttled and skipped when nothing changed.
   const CLOUD_SAVE_PERIODIC_INTERVAL = 30000;
@@ -1496,6 +1505,7 @@
       stopMarketSync();
       stopBlueMarketSync();
       if (marketChart) marketChart.stop();
+      if (marketHistoryRecorder) marketHistoryRecorder.reset();
       stopPodiumSync();
       if (window.CrypBank) window.CrypBank.stop();
       cloudSaveReady = false;
