@@ -437,12 +437,17 @@
 
       const pointCount = Math.max(model.raw.cryp.length, model.raw.blue.length);
       const failures = historyRecorder.getWriteFailures ? historyRecorder.getWriteFailures() : { fine: 0, coarse: 0 };
-      const writeFailing = failures.fine >= history.WRITE_FAILURE_LIMIT || failures.coarse >= history.WRITE_FAILURE_LIMIT;
+      const writeErrors = historyRecorder.getWriteErrors ? historyRecorder.getWriteErrors() : { fine: "", coarse: "" };
+      const failingKind = failures.fine >= history.WRITE_FAILURE_LIMIT ? "fine"
+        : failures.coarse >= history.WRITE_FAILURE_LIMIT ? "coarse" : null;
+      const writeErrorCode = failingKind ? writeErrors[failingKind] : "";
+      const writeFailing = failingKind !== null;
       if (statusEl) {
         statusEl.textContent = readError
           ? "Історія курсів недоступна — перевір підключення та правила Firestore."
-          : writeFailing ? "Нові точки історії не записуються — перевір опубліковані правила Firestore для marketHistory."
-          : pointCount < 3 ? "Історія накопичується разом зі зміною курсу." : "";
+          : writeFailing
+            ? "Нові точки історії не записуються (Firestore: " + (writeErrorCode || "unknown") + ")."
+            : pointCount < 3 ? "Історія накопичується разом зі зміною курсу." : "";
       }
 
       const width = Math.max(260, Math.floor(canvas.clientWidth || 320));

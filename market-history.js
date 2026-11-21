@@ -86,6 +86,7 @@
     const getDb = options.getDb;
     const onChange = typeof options.onChange === "function" ? options.onChange : () => {};
     const failures = { fine: 0, coarse: 0 };
+    const writeErrors = { fine: "", coarse: "" };
     const warned = { fine: false, coarse: false };
 
     function notify() {
@@ -104,6 +105,7 @@
       Promise.resolve(request).then(() => {
         if (countFailure && failures[kind] !== 0) {
           failures[kind] = 0;
+          writeErrors[kind] = "";
           warned[kind] = false;
           notify();
         }
@@ -114,6 +116,9 @@
 
     function fail(kind, error) {
       failures[kind] += 1;
+      writeErrors[kind] = error && typeof error.code === "string"
+        ? error.code
+        : error && typeof error.name === "string" ? error.name : "unknown";
       if (!warned[kind]) {
         warned[kind] = true;
         console.warn("Не вдалося записати історію курсу:", error);
@@ -140,6 +145,8 @@
     function reset() {
       failures.fine = 0;
       failures.coarse = 0;
+      writeErrors.fine = "";
+      writeErrors.coarse = "";
       warned.fine = false;
       warned.coarse = false;
       notify();
@@ -148,6 +155,7 @@
     return {
       recordTick,
       getWriteFailures: () => ({ ...failures }),
+      getWriteErrors: () => ({ ...writeErrors }),
       hasRepeatedWriteFailure: () => failures.fine >= WRITE_FAILURE_LIMIT || failures.coarse >= WRITE_FAILURE_LIMIT,
       reset
     };
