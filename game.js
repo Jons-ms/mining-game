@@ -1481,8 +1481,8 @@
         // Independent shared rates start in parallel; a Blue failure never blocks CRYP or the game.
         await Promise.all([startMarketSync(db, user.uid), startBlueMarketSync(db, user.uid)]);
         startPodiumSync(db, user.uid);
-        // CRYP BANK (beta) only reads the balances shown on the cards; it never changes the game state.
-        if (window.CrypBank && db) window.CrypBank.start(db, user.uid);
+        // CRYP BANK reads its own accounts and asks the server (openBankAccount) to open one; it never changes balances.
+        if (window.CrypBank && db) window.CrypBank.start(db, user.uid, functions);
 
         els.playerName.value = state.playerName;
         render();

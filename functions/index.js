@@ -14,6 +14,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const engine = require("./lib/engine.js");
+const bank = require("./lib/bank.js");
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -134,6 +135,36 @@ exports.heartbeat = onCall(async (request) => {
       return beat.state;
     });
     return { state: publicState(result), serverNow: Date.now() };
+  } catch (error) {
+    throw wrap(error);
+  }
+});
+
+// CRYP BANK: the server opens the account and picks a unique 16-digit number. One account per player and
+// currency (the document id), idempotent: a repeated call returns the existing card and creates nothing.
+const MAX_CARD_ATTEMPTS = 8;
+exports.openBankAccount = onCall(async (request) => {
+  const uid = requireUid(request);
+  const currency = request.data && request.data.currency;
+  if (!Object.prototype.hasOwnProperty.call(bank.CURRENCIES, currency)) {
+    throw new HttpsError("invalid-argument", "Невідома валюта.");
+  }
+  try {
+    const accountRef = db.collection("bankAccounts").doc(bank.accountId(uid, currency));
+    for (let attempt = 1; attempt <= MAX_CARD_ATTEMPTS; attempt += 1) {
+      const cardNumber = bank.generateCardNumber(currency);
+      const cardRef = db.collection("cardNumbers").doc(cardNumber);
+      const result = await db.runTransaction(async (transaction) => {
+        const [account, card] = await Promise.all([transaction.get(accountRef), transaction.get(cardRef)]);
+        if (account.exists) return { cardNumber: account.data().cardNumber, created: false };
+        if (card.exists) return null; // number taken: try another one
+        transaction.set(cardRef, { uid, currency, createdAt: FieldValue.serverTimestamp() });
+        transaction.set(accountRef, { uid, currency, cardNumber, openedAt: FieldValue.serverTimestamp() });
+        return { cardNumber, created: true };
+      });
+      if (result) return { currency, cardNumber: result.cardNumber, created: result.created };
+    }
+    throw new HttpsError("resource-exhausted", "Не вдалося підібрати номер картки. Спробуй ще раз.");
   } catch (error) {
     throw wrap(error);
   }

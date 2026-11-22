@@ -36,12 +36,11 @@ function texts(node) {
   return out;
 }
 
-// Minimal Firestore double: get(), and a batch that fails like the rules do when a document already exists.
+// Firestore double for the browser: it can only READ, like the real rules. Writes happen in the fake server below.
 function makeDb(seed = {}, options = {}) {
   const documents = { ...seed };
-  const commits = [];
-  const db = {
-    documents, commits,
+  return {
+    documents,
     collection(name) {
       return {
         doc(id) {
@@ -54,21 +53,34 @@ function makeDb(seed = {}, options = {}) {
           return ref;
         }
       };
-    },
-    batch() {
-      const operations = [];
-      return {
-        set(ref, data) { operations.push({ ref, data }); },
-        async commit() {
-          if (options.failCommit) throw new Error('permission-denied');
-          if (operations.some((operation) => documents[operation.ref.path] !== undefined)) throw new Error('already-exists');
-          operations.forEach((operation) => { documents[operation.ref.path] = { ...operation.data }; });
-          commits.push(operations.map((operation) => operation.ref.path));
-        }
-      };
     }
   };
-  return db;
+}
+
+// Fake openBankAccount function: same rules as functions/index.js (one account per player and currency,
+// unique numbers, retries on a taken number), using the real server card-number generator.
+function makeFunctions(db, options = {}) {
+  const serverBank = require('../functions/lib/bank.js');
+  const calls = [];
+  return {
+    calls,
+    httpsCallable: (name) => async (data) => {
+      calls.push({ name, data });
+      if (options.fail) throw new Error('unavailable');
+      const uid = options.uid || 'u1';
+      if (!serverBank.CURRENCIES[data.currency]) throw new Error('invalid-argument');
+      const accountPath = `bankAccounts/${serverBank.accountId(uid, data.currency)}`;
+      if (db.documents[accountPath]) return { data: { currency: data.currency, cardNumber: db.documents[accountPath].cardNumber, created: false } };
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const cardNumber = serverBank.generateCardNumber(data.currency, options.randomDigit);
+        if (db.documents[`cardNumbers/${cardNumber}`]) continue;
+        db.documents[`cardNumbers/${cardNumber}`] = { uid, currency: data.currency };
+        db.documents[accountPath] = { uid, currency: data.currency, cardNumber };
+        return { data: { currency: data.currency, cardNumber, created: true } };
+      }
+      throw new Error('resource-exhausted');
+    }
+  };
 }
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -76,9 +88,16 @@ const stamp = () => ({ serverTimestamp: true });
 
 function makeBank(overrides = {}) {
   const document = makeDocument();
-  let counter = 0;
-  const bank = Bank.create({ document, serverTimestamp: stamp, randomDigit: () => (counter++ * 7 + 3) % 10, ...overrides });
+  const bank = Bank.create({ document, ...overrides });
   return { bank, document };
+}
+
+// Starts a bank for `uid` wired to a fake server over `db`.
+function startBank(db, uid = 'u1', serverOptions = {}) {
+  const functions = makeFunctions(db, { uid, ...serverOptions });
+  const made = makeBank();
+  made.bank.start(db, uid, functions);
+  return { ...made, functions };
 }
 
 test('the game has exactly three currencies and no EURO', () => {
@@ -89,35 +108,25 @@ test('the game has exactly three currencies and no EURO', () => {
 test('card numbers have 16 digits, a currency prefix and a valid Luhn check digit', () => {
   Bank.CURRENCIES.forEach((currency) => {
     for (let index = 0; index < 50; index++) {
-      const number = Bank.generateCardNumber(currency.id);
+      const number = require('../functions/lib/bank.js').generateCardNumber(currency.id);
       assert.match(number, /^[0-9]{16}$/);
       assert.ok(number.startsWith(currency.prefix));
       assert.ok(Bank.isValidCardNumber(number));
     }
   });
-  assert.throws(() => Bank.generateCardNumber('euro'));
-  const valid = Bank.generateCardNumber('uah');
+  const valid = require('../functions/lib/bank.js').generateCardNumber('uah');
   const wrongCheck = valid.slice(0, 15) + String((Number(valid[15]) + 1) % 10);
   assert.equal(Bank.isValidCardNumber(wrongCheck), false);
   assert.equal(Bank.isValidCardNumber('abc'), false);
   assert.equal(Bank.formatCardNumber('9001123412341234'), '9001 1234 1234 1234');
 });
 
-test('open-account documents carry no money and are tied to one player and currency', () => {
-  const writes = Bank.buildOpenAccountWrites('u1', 'cryp', '9002000000000007', stamp());
-  assert.equal(writes.accountId, 'u1_cryp');
-  assert.deepEqual(Object.keys(writes.account).sort(), ['cardNumber', 'currency', 'openedAt', 'uid']);
-  assert.deepEqual(Object.keys(writes.reservation).sort(), ['createdAt', 'currency', 'uid']);
-  assert.ok(!('balance' in writes.account));
-});
-
 test('no accounts are created on start; the cards offer to open them', async () => {
   const db = makeDb();
-  const { bank, document } = makeBank();
-  bank.start(db, 'u1');
+  const { bank, document, functions } = startBank(db);
   await flush();
   assert.equal(bank._state().status, 'ready');
-  assert.equal(db.commits.length, 0);
+  assert.equal(functions.calls.length, 0);
   assert.deepEqual(Object.keys(db.documents), []);
   const cards = document.getElementById('bankCards').children;
   assert.equal(cards.length, 3);
@@ -127,14 +136,13 @@ test('no accounts are created on start; the cards offer to open them', async () 
 
 test('opening an account stores it in Firestore and shows the existing balance unchanged', async () => {
   const db = makeDb();
-  const { bank, document } = makeBank();
-  bank.start(db, 'u1');
+  const { bank, document, functions } = startBank(db);
   bank.setBalances({ cash: 1234.5, cryp: 10.25, blue: 0.5 });
   await flush();
   assert.equal(await bank.openAccount('uah'), true);
 
-  assert.equal(db.commits.length, 1);
-  assert.deepEqual(db.commits[0].sort(), ['bankAccounts/u1_uah', `cardNumbers/${db.documents['bankAccounts/u1_uah'].cardNumber}`].sort());
+  assert.deepEqual(functions.calls, [{ name: 'openBankAccount', data: { currency: 'uah' } }], 'the browser only asks the server');
+  assert.deepEqual(Object.keys(db.documents).sort(), ['bankAccounts/u1_uah', `cardNumbers/${db.documents['bankAccounts/u1_uah'].cardNumber}`].sort());
   const account = db.documents['bankAccounts/u1_uah'];
   assert.equal(account.uid, 'u1');
   assert.equal(account.currency, 'uah');
@@ -150,27 +158,24 @@ test('opening an account stores it in Firestore and shows the existing balance u
 
 test('one account per currency: a second opening is refused and nothing is written', async () => {
   const db = makeDb();
-  const { bank } = makeBank();
-  bank.start(db, 'u1');
+  const { bank, functions } = startBank(db);
   await flush();
   assert.equal(await bank.openAccount('blue'), true);
   const before = JSON.stringify(db.documents);
   assert.equal(await bank.openAccount('blue'), false);
   assert.equal(JSON.stringify(db.documents), before);
-  assert.equal(db.commits.length, 1);
+  assert.equal(functions.calls.length, 1, 'the second attempt is refused in the browser and never reaches the server');
 });
 
 test('accounts survive a new login or another device', async () => {
   const db = makeDb();
-  const first = makeBank().bank;
-  first.start(db, 'u1');
+  const first = startBank(db).bank;
   await flush();
   await first.openAccount('cryp');
   const number = db.documents['bankAccounts/u1_cryp'].cardNumber;
   first.stop();
 
-  const second = makeBank();
-  second.bank.start(db, 'u1');
+  const second = startBank(db);
   await flush();
   assert.equal(second.bank._state().accounts.cryp.cardNumber, number);
   assert.equal(second.bank._state().accounts.uah, undefined);
@@ -178,64 +183,13 @@ test('accounts survive a new login or another device', async () => {
 
 test("another player's accounts are not shown", async () => {
   const db = makeDb();
-  const owner = makeBank().bank;
-  owner.start(db, 'u1');
+  const owner = startBank(db).bank;
   await flush();
   await owner.openAccount('uah');
 
-  const other = makeBank().bank;
-  other.start(db, 'u2');
+  const other = startBank(db, 'u2').bank;
   await flush();
   assert.deepEqual(other._state().accounts, {});
-});
-
-test('a taken card number is retried with another number', async () => {
-  // First attempt generates all zeros (already reserved by someone else), the second all ones.
-  const taken = Bank.generateCardNumber('uah', () => 0);
-  const db = makeDb({ [`cardNumbers/${taken}`]: { uid: 'u9', currency: 'uah' } });
-  let calls = 0;
-  const { bank } = makeBank({ randomDigit: () => (calls++ < 11 ? 0 : 1) });
-  bank.start(db, 'u1');
-  await flush();
-  assert.equal(await bank.openAccount('uah'), true);
-  const account = db.documents['bankAccounts/u1_uah'];
-  assert.notEqual(account.cardNumber, taken);
-  assert.ok(Bank.isValidCardNumber(account.cardNumber));
-  // the other player's reservation is untouched and exactly one new reservation was added
-  assert.deepEqual(db.documents[`cardNumbers/${taken}`], { uid: 'u9', currency: 'uah' });
-  assert.equal(Object.keys(db.documents).filter((key) => key.startsWith('cardNumbers/')).length, 2);
-});
-
-test('gives up after the maximum number of attempts when every number is taken', async () => {
-  const taken = Bank.generateCardNumber('uah', () => 0);
-  const db = makeDb({ [`cardNumbers/${taken}`]: { uid: 'u9', currency: 'uah' } });
-  const { bank } = makeBank({ randomDigit: () => 0 });
-  const originalError = console.error;
-  console.error = () => {};
-  try {
-    bank.start(db, 'u1');
-    await flush();
-    assert.equal(await bank.openAccount('uah'), false);
-  } finally {
-    console.error = originalError;
-  }
-  assert.equal(db.documents['bankAccounts/u1_uah'], undefined);
-});
-
-test('a failed write shows a message and does not create a card', async () => {
-  const db = makeDb({}, { failCommit: true });
-  const { bank, document } = makeBank();
-  const originalError = console.error;
-  console.error = () => {};
-  try {
-    bank.start(db, 'u1');
-    await flush();
-    assert.equal(await bank.openAccount('uah'), false);
-  } finally {
-    console.error = originalError;
-  }
-  assert.equal(bank._state().accounts.uah, undefined);
-  assert.match(document.getElementById('bankStatus').textContent, /Не вдалося відкрити рахунок UAH/);
 });
 
 test('a failed load shows a rules hint instead of cards', async () => {
@@ -256,8 +210,7 @@ test('a failed load shows a rules hint instead of cards', async () => {
 
 test('logging out clears the accounts and ignores a late load', async () => {
   const db = makeDb();
-  const { bank, document } = makeBank();
-  bank.start(db, 'u1');
+  const { bank, document } = startBank(db);
   bank.stop();
   await flush();
   assert.equal(bank._state().status, 'idle');
@@ -281,4 +234,42 @@ test('the page is wired in as the sixth menu item and the bank never writes play
   const rules = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');
   assert.match(rules, /match \/bankAccounts\/\{accountId\}/);
   assert.match(rules, /match \/cardNumbers\/\{cardNumber\}/);
+});
+
+test('a taken card number is retried by the server, and the other player\'s reservation is untouched', async () => {
+  const serverBank = require('../functions/lib/bank.js');
+  const taken = serverBank.generateCardNumber('uah', () => 0);
+  const db = makeDb({ [`cardNumbers/${taken}`]: { uid: 'u9', currency: 'uah' } });
+  let calls = 0;
+  const { bank } = startBank(db, 'u1', { randomDigit: () => (calls++ < 11 ? 0 : 1) });
+  await flush();
+  assert.equal(await bank.openAccount('uah'), true);
+  const account = db.documents['bankAccounts/u1_uah'];
+  assert.notEqual(account.cardNumber, taken);
+  assert.deepEqual(db.documents[`cardNumbers/${taken}`], { uid: 'u9', currency: 'uah' });
+});
+
+test('a failed server call shows a message and does not create a card', async () => {
+  const db = makeDb();
+  const { bank, document } = startBank(db, 'u1', { fail: true });
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    await flush();
+    assert.equal(await bank.openAccount('uah'), false);
+  } finally {
+    console.error = originalError;
+  }
+  assert.equal(bank._state().accounts.uah, undefined);
+  assert.match(document.getElementById('bankStatus').textContent, /Не вдалося відкрити рахунок UAH/);
+});
+
+test('the browser cannot write bank documents: the rules are read-only and the registry is closed', () => {
+  const root = path.join(__dirname, '..');
+  const source = fs.readFileSync(path.join(root, 'bank.js'), 'utf8');
+  assert.ok(!/\.set\(|\.batch\(|\.update\(|\.add\(/.test(source), 'bank.js has no Firestore writes');
+  assert.match(source, /httpsCallable\("openBankAccount"\)/);
+  const rules = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');
+  assert.match(rules, /match \/bankAccounts\/\{accountId\}[\s\S]*?allow write: if false;/);
+  assert.match(rules, /match \/cardNumbers\/\{cardNumber\}\s*\{\s*allow read, write: if false;/);
 });
