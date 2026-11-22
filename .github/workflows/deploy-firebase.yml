@@ -1,0 +1,90 @@
+name: Deploy Firebase
+
+# Manual only. Each run performs ONE step of the migration (see docs/DEPLOY.md).
+# The repository is public, so logs are public too: nothing below prints secrets, backups or player data.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Step to run"
+        type: choice
+        required: true
+        options:
+          - backup
+          - deploy-functions
+          - migrate-dry-run
+          - deploy-rules
+          - migrate-apply
+      ref:
+        description: "Branch with the code to deploy"
+        required: true
+        default: server-migration
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firebase-deploy
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROJECT_ID: cryp-togame
+      STORAGE_BUCKET: cryp-togame.firebasestorage.app
+      STEP: ${{ inputs.action }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the service account secret
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$SA_JSON" ]; then echo "::error::Secret FIREBASE_SERVICE_ACCOUNT is not set (see docs/DEPLOY.md, step 3)"; exit 1; fi
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$RUNNER_TEMP/sa.json" >> "$GITHUB_ENV"
+          node -e 'const k=require(process.argv[1]); if(k.project_id!==process.env.PROJECT_ID){console.error("::error::The key belongs to project "+k.project_id+", expected "+process.env.PROJECT_ID);process.exit(1)}' "$RUNNER_TEMP/sa.json"
+
+      - name: Install dependencies
+        if: ${{ env.STEP != 'backup' && env.STEP != 'deploy-rules' }}
+        run: npm install --prefix functions --no-audit --no-fund
+
+      - name: Run server tests before touching Firebase
+        if: ${{ env.STEP == 'deploy-functions' }}
+        run: npm test --prefix functions
+
+      - name: Install Firebase CLI
+        if: ${{ env.STEP == 'deploy-functions' || env.STEP == 'deploy-rules' }}
+        run: npm install -g firebase-tools
+
+      - name: Run the step
+        run: |
+          case "$STEP" in
+            backup)
+              gcloud auth activate-service-account --key-file="$GOOGLE_APPLICATION_CREDENTIALS" --project="$PROJECT_ID"
+              DEST="gs://$STORAGE_BUCKET/backups/firestore-$(date -u +%Y%m%d-%H%M%S)"
+              gcloud firestore export "$DEST" --project="$PROJECT_ID"
+              echo "Backup written to $DEST" ;;
+            deploy-functions)
+              firebase deploy --only functions --project "$PROJECT_ID" --non-interactive --force ;;
+            deploy-rules)
+              firebase deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive ;;
+            migrate-dry-run)
+              node scripts/migrate-players.js ;;
+            migrate-apply)
+              node scripts/migrate-players.js --apply ;;
+            *)
+              echo "::error::Unknown step: $STEP"; exit 1 ;;
+          esac
+
+      - name: Remove the key from the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/sa.json"
