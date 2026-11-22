@@ -2,8 +2,10 @@ name: Deploy Firebase
 
 # Manual only, and every run must be approved by the owner in the "production" environment before it gets any
 # Google credentials. One step per run (see docs/DEPLOY.md). There are NO long-lived keys: Google access comes
-# from GitHub OIDC (Workload Identity Federation) and is limited to this repository, this workflow file on main
-# and the "production" environment. The repository is public, so logs are public: nothing here prints secrets or player data.
+# from GitHub OIDC (Workload Identity Federation). Google accepts the token only if ALL of these hold in the token:
+# repository Jons-ms/mining-game, workflow_ref = this file on refs/heads/main, ref = refs/heads/main,
+# event_name = workflow_dispatch, environment = production (the provider condition is in docs/DEPLOY.md, step 1.3).
+# The repository is public, so logs are public: nothing here prints secrets or player data.
 on:
   workflow_dispatch:
     inputs:
