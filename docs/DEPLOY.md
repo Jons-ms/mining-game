@@ -49,6 +49,11 @@
 | Cloud Datastore User (`roles/datastore.user`) | функції читають і пишуть Firestore. Може вже бути в складі Editor, але не завжди | з практики |
 | Eventarc Event Receiver (`roles/eventarc.eventReceiver`) | прийом події від розкладу `hourlyPodium` | не підтверджено |
 
+Необов'язковий крок `set-image-cleanup`: після кожного розгортання функцій у Artifact Registry лишаються старі образи збирання. Firebase CLI хоче налаштувати їх автоматичне видалення, а без `--force` у неінтерактивному режимі зупиняється з повідомленням про `cleanup policy`. Це лише про образи збирання, а не про функції чи дані. Щоб налаштувати політику один раз:
+1. Спершу виконайте `deploy-functions`: репозиторій `gcf-artifacts` з'являється після першого розгортання.
+2. [Artifact Registry](https://console.cloud.google.com/artifacts?project=cryp-togame) → відкрийте репозиторій `gcf-artifacts` (регіон `europe-west1`) → вкладка **Permissions** → **Grant access**: `firebase-deployer`, роль **Artifact Registry Repository Administrator**. Це право лише на цей репозиторій (CLI потребує `artifactregistry.repositories.update` і `artifactregistry.versions.delete`).
+3. Запустіть крок `set-image-cleanup`. Образи старші за 7 днів видалятимуться автоматично, і наступні розгортання завершуватимуться без попередження.
+
 Eventarc для `firebase-deployer`: документація описує керування тригерами як роботу службового акаунта Cloud Functions, окремої ролі для розгортальника не вимагає, тому я її не видаю. Якщо розгортання покаже помилку з `eventarc`, додамо **Eventarc Developer** (`roles/eventarc.developer`).
 
 Не видавайте жодному акаунту Editor, Owner чи Firebase Admin.
@@ -93,7 +98,8 @@ Eventarc для `firebase-deployer`: документація описує ке�
 |---|---|---|
 | `backup` | `firebase-deployer` | Cloud Datastore Import Export Admin; Storage Admin на бакеті |
 | `migrate-dry-run` | `firebase-migrator` | Cloud Datastore User (лише читає) |
-| `deploy-functions` | `firebase-deployer` | Cloud Functions Developer; Cloud Run Admin; Cloud Scheduler Admin; Pub/Sub Editor; Firebase Viewer; Service Usage Consumer; Service Account User на акаунті виконання |
+| `deploy-functions` | `firebase-deployer` | Cloud Functions Developer (у т.ч. `functions.list` для перегляду наявних функцій); Cloud Run Admin; Cloud Scheduler Admin; Pub/Sub Editor; Firebase Viewer; Service Usage Consumer; Service Account User на акаунті виконання |
+| `set-image-cleanup` (необов'язковий) | `firebase-deployer` | Artifact Registry Repository Administrator лише на репозиторії функцій (див. нижче) |
 | `deploy-rules` | `firebase-deployer` | Firebase Rules Admin; Firebase Viewer |
 | `migrate-apply` | `firebase-migrator` | Cloud Datastore User |
 
@@ -108,7 +114,8 @@ Eventarc для `firebase-deployer`: документація описує ке�
 |---|------|-----------|----------------------|
 | 1 | `backup` | Повний експорт Firestore в сховище проєкту | Ні (лише копія) |
 | 2 | `migrate-dry-run` | Пробний прогін: читає, нічого не пише. Заодно перевіряє, що вхід без ключа працює | Ні |
-| 3 | `deploy-functions` | Публікує Cloud Functions (старий сайт їх не викликає) | Так, додає функції |
+| 3 | `deploy-functions` | Спершу показує наявні функції, потім публікує **лише** п'ять названих: `initPlayer`, `gameAction`, `heartbeat`, `openBankAccount`, `hourlyPodium`. Без `--force` | Так, додає й оновлює ці п'ять; видалити нічого не може |
+| 3б | `set-image-cleanup` (необов'язково) | Автоматичне видалення старих образів збирання функцій через 7 днів | Лише налаштування Artifact Registry |
 | 4 | `deploy-rules` | Публікує правила. **Перед цим попередьте друзів, що гра на паузі** | Так: старий сайт більше не зможе зберігати |
 | 5 | `migrate-apply` | Міграція гравців і перший знімок Подіуму, нічого не видаляє | Так, змінює документи гравців |
 | 6 | Злити Pull Request `server-migration` у `main` | Публікує новий сайт | Так |
@@ -116,7 +123,17 @@ Eventarc для `firebase-deployer`: документація описує ке�
 
 Випадково запустити розгортання чи міграцію неможливо: потрібні запуск із `main`, ваш власний акаунт, збіг поля confirm і ваше схвалення, а Google ще й перевіряє токен за умовою з кроку 1.3.
 
-## 5. Після завершення
+## 5. Захист від видалення
+
+Перевірено за кодом Firebase CLI 15.37.0 (версія в workflow зафіксована):
+- **Видалення функцій.** Якщо в production є функція, якої немає в коді, `firebase deploy` її видаляє. Без `--force` і без людини, яка відповідає на запит, видалення не відбувається: у неінтерактивному режимі CLI зупиняється з помилкою «Aborting because deletion cannot proceed in non-interactive mode». Єдиний обхід, який я знайшов у коді, це `--force`. Параметр `--non-interactive` його не обходить.
+- **Розгортання лише названих функцій.** Workflow передає `--only` зі списком із п'яти функцій, тож план розгортання не містить жодної іншої функції, і вони не можуть опинитися в списку на видалення. Перед розгортанням перевіряється, що цей список збігається з експортами `functions/index.js`, і виводиться перелік наявних функцій проєкту (лише назви; репозиторій публічний, тож лог теж).
+- **`--force` у workflow.** Єдиний випадок: необов'язковий крок `set-image-cleanup` (див. вище), де прапорець лише пропускає підтвердження створення політики очищення образів.
+- **Дані.** Скрипт міграції не має жодного виклику видалення; пробний прогін (`migrate-dry-run`) нічого не пише у Firestore, лише локальні файли на тимчасовому runner; `migrate-apply` лише робить `set` з `merge` у документи гравців, які ще не мігровані, у транзакції на свіжому документі; єдиний інший запис це знімок `podium/current`. Експорт Firestore створює нову теку з часовою міткою і нічого не перезаписує. `deploy-rules` замінює лише набір правил, дані не змінює.
+- **Відкат правил.** Старі правила лежать у `main`: запустіть `deploy-rules` з `ref` = `main`.
+- **Очікуване повідомлення.** Якщо політика очищення образів ще не налаштована, наприкінці `deploy-functions` CLI покаже `Functions successfully deployed but could not set up cleanup policy`. Функції на той момент уже розгорнуті; це не помилка розгортання. Виконайте необов'язковий `set-image-cleanup`, і повідомлення зникне.
+
+## 6. Після завершення
 Видаліть доступ: у Google Cloud видаліть акаунти `firebase-deployer` і `firebase-migrator` та пул `github` (або лише відкличте роль Workload Identity User). У GitHub можна видалити змінні й середовище `production`.
 
 ## Джерела
@@ -126,4 +143,5 @@ Eventarc для `firebase-deployer`: документація описує ке�
 - [Ролі Cloud Run](https://docs.cloud.google.com/run/docs/reference/iam/roles) і [ролі Cloud Functions](https://docs.cloud.google.com/functions/docs/reference/iam/roles)
 - [Firebase Rules: ролі](https://docs.cloud.google.com/iam/docs/roles-permissions/firebaserules)
 - [Firestore IAM](https://docs.cloud.google.com/firestore/native/docs/security/iam) і [експорт/імпорт](https://docs.cloud.google.com/firestore/native/docs/manage-data/export-import)
+- [Firebase CLI: код розгортання функцій (`prompts.ts`, `planner.ts`, `release/index.ts`)](https://github.com/firebase/firebase-tools/tree/v15.37.0/src/deploy/functions)
 - [Eventarc: контроль доступу](https://docs.cloud.google.com/eventarc/docs/access-control)

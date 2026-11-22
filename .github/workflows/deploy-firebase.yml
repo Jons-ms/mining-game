@@ -6,6 +6,10 @@ name: Deploy Firebase
 # repository Jons-ms/mining-game, workflow_ref = this file on refs/heads/main, ref = refs/heads/main,
 # event_name = workflow_dispatch, environment = production (the provider condition is in docs/DEPLOY.md, step 1.3).
 # The repository is public, so logs are public: nothing here prints secrets or player data.
+#
+# Nothing here can delete functions or data: deploys name the functions explicitly and never use --force
+# (without --force the Firebase CLI refuses to delete functions in non-interactive mode).
+# The only --force in this file belongs to the separate, optional set-image-cleanup step (see the comment there).
 on:
   workflow_dispatch:
     inputs:
@@ -17,6 +21,7 @@ on:
           - backup
           - migrate-dry-run
           - deploy-functions
+          - set-image-cleanup
           - deploy-rules
           - migrate-apply
       confirm:
@@ -56,7 +61,7 @@ jobs:
           [ "$ACTOR" = "$OWNER" ] || fail "Only the repository owner can run it."
           [ "$CONFIRM" = "$STEP" ] || fail "Confirmation does not match: type exactly '$STEP' in the 'confirm' field."
           case "$CODE_REF" in server-migration|main) ;; *) fail "ref must be server-migration or main." ;; esac
-          case "$STEP" in backup|migrate-dry-run|deploy-functions|deploy-rules|migrate-apply) ;; *) fail "Unknown step." ;; esac
+          case "$STEP" in backup|migrate-dry-run|deploy-functions|set-image-cleanup|deploy-rules|migrate-apply) ;; *) fail "Unknown step." ;; esac
           echo "Step '$STEP' on '$CODE_REF' is waiting for approval in the production environment."
 
   run:
@@ -72,6 +77,9 @@ jobs:
       STEP: ${{ inputs.action }}
       PROJECT_ID: cryp-togame
       STORAGE_BUCKET: cryp-togame.firebasestorage.app
+      FUNCTIONS_REGION: europe-west1
+      # The ONLY functions this workflow deploys. Must match the exports of functions/index.js (checked below).
+      DEPLOY_ONLY: functions:initPlayer,functions:gameAction,functions:heartbeat,functions:openBankAccount,functions:hourlyPodium
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -108,7 +116,7 @@ jobs:
         run: npm test --prefix functions
 
       - name: Install Firebase CLI (pinned)
-        if: ${{ env.STEP == 'deploy-functions' || env.STEP == 'deploy-rules' }}
+        if: ${{ env.STEP == 'deploy-functions' || env.STEP == 'set-image-cleanup' || env.STEP == 'deploy-rules' }}
         run: npm install -g firebase-tools@15.37.0 --ignore-scripts
 
       - name: Run the step
@@ -121,7 +129,23 @@ jobs:
             migrate-dry-run)
               node scripts/migrate-players.js ;;
             deploy-functions)
-              firebase deploy --only functions --project "$PROJECT_ID" --non-interactive --force ;;
+              # 1) The list in DEPLOY_ONLY must equal the functions exported by the code, so nothing is silently skipped or added.
+              EXPORTED=$(grep -oE '^exports\.[A-Za-z0-9_]+ = on(Call|Request|Schedule)' functions/index.js | sed -E 's/^exports\.([A-Za-z0-9_]+) = .*/functions:\1/' | sort | paste -sd, -)
+              WANTED=$(echo "$DEPLOY_ONLY" | tr ',' '\n' | sort | paste -sd, -)
+              if [ "$EXPORTED" != "$WANTED" ]; then
+                echo "::error::DEPLOY_ONLY does not match the functions in functions/index.js"; echo "code:     $EXPORTED"; echo "workflow: $WANTED"; exit 1
+              fi
+              # 2) Read-only look at what already exists in production (public log: function names only).
+              echo "Functions that already exist in $PROJECT_ID:"
+              firebase functions:list --project "$PROJECT_ID" --non-interactive
+              # 3) Deploy ONLY the named functions, without --force. In non-interactive mode the Firebase CLI aborts instead of
+              #    deleting any function that is missing from the code, and --only keeps every other function out of the plan.
+              firebase deploy --only "$DEPLOY_ONLY" --project "$PROJECT_ID" --non-interactive ;;
+            set-image-cleanup)
+              # Optional. Sets the Artifact Registry cleanup policy (old build images are deleted after 7 days) for the functions
+              # repository. This is the only command here with --force; it makes the CLI skip its confirmation for creating
+              # that cleanup policy and cannot touch functions or Firestore data. Needs the extra role from docs/DEPLOY.md.
+              firebase functions:artifacts:setpolicy --days 7 --location "$FUNCTIONS_REGION" --force --project "$PROJECT_ID" --non-interactive ;;
             deploy-rules)
               firebase deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive ;;
             migrate-apply)
