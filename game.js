@@ -1469,11 +1469,8 @@
         const db = firebase.db;
         const functions = firebase.functions;
         if (!functions) throw new Error("Cloud Functions недоступні");
-        // The server creates the player (490 UAH) or returns the saved one. A pre-migration local save is sent only
-        // once so the server can use it for an account that was not migrated yet; it is never deleted here.
-        let legacySave = null;
-        try { legacySave = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (error) { legacySave = null; }
-        const init = await functions.httpsCallable("initPlayer")(legacySave && Array.isArray(legacySave.slots) ? { legacySave } : {});
+        // The server creates the player (490 UAH) or returns the saved one. The browser sends nothing about progress.
+        const init = await functions.httpsCallable("initPlayer")({});
         applyServerState(init.data);
         serverReady = true;
         startHeartbeat();

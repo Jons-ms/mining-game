@@ -57,8 +57,8 @@ async function readRates(transaction) {
 }
 
 // Creates the server-managed player document, or returns the existing one.
-// An existing pre-migration document is normalised in place (nothing is dropped);
-// a newer pre-migration local save sent by the browser is used only for such a document.
+// An existing pre-migration document is normalised in place (nothing is dropped, unknown fields are kept).
+// Nothing sent by the browser is ever used to build a save: a player without a document starts with 490 UAH.
 exports.initPlayer = onCall(async (request) => {
   const uid = requireUid(request);
   try {
@@ -72,7 +72,7 @@ exports.initPlayer = onCall(async (request) => {
         // (the time while the game was closed is never paid). One write per login, only after a real break.
         if (nowMs - existing.lastMiningAt > engine.MAX_GAP_MS) {
           existing.lastMiningAt = nowMs;
-          transaction.set(ref, storedDoc(existing));
+          transaction.set(ref, storedDoc(existing), { merge: true });
         }
         return existing;
       }
@@ -80,13 +80,10 @@ exports.initPlayer = onCall(async (request) => {
       if (!snapshot.exists) {
         state = engine.newState(nowMs);
       } else {
-        const stored = snapshot.data();
-        const legacy = request.data && request.data.legacySave;
-        const newer = legacy && Number(legacy.savedAt) > (Number(stored.savedAt) || 0) && Array.isArray(legacy.slots);
-        state = engine.normalizeState(newer ? legacy : stored, 0);
+        state = engine.normalizeState(snapshot.data(), 0);
         state.lastMiningAt = nowMs; // no mining credit for the time before the migration
       }
-      transaction.set(ref, storedDoc(state));
+      transaction.set(ref, storedDoc(state), { merge: true });
       return state;
     });
     return { state: publicState(result), serverNow: Date.now() };

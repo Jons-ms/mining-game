@@ -463,6 +463,7 @@ test('the browser never writes players or podium data directly: only Cloud Funct
   assert.match(source, /httpsCallable\("gameAction"\)/);
   assert.match(source, /httpsCallable\("heartbeat"\)/);
   assert.match(source, /httpsCallable\("initPlayer"\)/);
+  assert.ok(!/legacySave/.test(source), 'the browser never sends a saved game to the server');
 });
 
 test('Blue cards: buy, install, remove and sell through the server at the approved prices and 50% resale', async () => {

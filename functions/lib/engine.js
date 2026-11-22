@@ -248,7 +248,8 @@ const ACTIONS = {
  * Returns { state, duplicate }. Throws GameError and leaves the input untouched on any failure.
  */
 function applyAction(state, action, ctx) {
-  const handler = ACTIONS[action && action.type];
+  const type = action && action.type;
+  const handler = typeof type === "string" && Object.prototype.hasOwnProperty.call(ACTIONS, type) ? ACTIONS[type] : null;
   if (!handler) throw new GameError("invalid-argument", "Невідома дія.");
   const opId = String((action && action.opId) || "");
   if (!/^[A-Za-z0-9_-]{8,64}$/.test(opId)) throw new GameError("invalid-argument", "Відсутній ідентифікатор операції.");

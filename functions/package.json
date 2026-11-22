@@ -1,8 +1,8 @@
 {
   "name": "cryp-mining-functions",
   "private": true,
-  "description": "Server-side game logic for CRYP Mining (Firebase Cloud Functions, Node 20)",
-  "engines": { "node": "20" },
+  "description": "Server-side game logic for CRYP Mining (Firebase Cloud Functions, Node 22)",
+  "engines": { "node": "22" },
   "main": "index.js",
   "scripts": {
     "test": "node --test test/*.test.js"

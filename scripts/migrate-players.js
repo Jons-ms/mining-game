@@ -9,7 +9,7 @@
  *   node scripts/migrate-players.js --apply    # migrates, then verifies every player
  *
  * It never deletes anything. A JSON backup of the affected collections is written to backups/<timestamp>/ first
- * (also take a full `gcloud firestore export gs://<bucket>/<folder>` before --apply).
+ * (also take a full Firestore export before --apply). Run it again after the site is published: it is idempotent.
  * Re-running is safe: players that are already migrated are skipped, and each player is keyed by its Firebase UID,
  * so no duplicates can appear.
  */
@@ -21,7 +21,8 @@ const admin = requireFromFunctions("firebase-admin");
 const engine = require("../functions/lib/engine.js");
 
 const APPLY = process.argv.includes("--apply");
-const BACKUP_COLLECTIONS = ["players", "podiumPlayers", "bankAccounts", "market"];
+const BACKUP_COLLECTIONS = ["players", "podiumPlayers", "bankAccounts", "cardNumbers", "market"];
+// The repository is public and so are CI logs: console output never contains full UIDs; details go to the report file.
 
 function plain(value) {
   return JSON.parse(JSON.stringify(value, (key, v) => (v && typeof v.toDate === "function" ? v.toDate().toISOString() : v)));
@@ -68,20 +69,32 @@ async function main() {
     if (raw.serverManaged === true) { report.alreadyMigrated += 1; continue; }
     report.toMigrate += 1;
     const state = engine.normalizeState(raw, 0);
-    const before = summary(engine.normalizeState(raw, 0));
+    const before = summary(state);
     report.catalogDifferences.push(...catalogMismatches(doc.id, state));
-    // sanity: normalisation must not lose money or cards
+    // sanity: normalisation must not lose cards
     const rawCards = [].concat(raw.slots || [], raw.extraSlots || [], raw.inventory || []).filter(Boolean).length;
     const stateCards = before.farm + before.extra + before.inventory;
     if (rawCards !== stateCards) report.problems.push(`${doc.id}: card count ${rawCards} -> ${stateCards}`);
     if (!APPLY) continue;
 
-    state.lastMiningAt = Date.now();
-    await doc.ref.set({ ...state, serverManaged: true, schema: 2, migratedAt: admin.firestore.FieldValue.serverTimestamp() });
+    // The write happens in a transaction on the FRESH document: if the player saved in the meantime, Firestore
+    // retries with the new data, and a document that became server-managed meanwhile is left alone.
+    let skipped = false;
+    let writtenSummary = null;
+    await db.runTransaction(async (transaction) => {
+      skipped = false;
+      const fresh = await transaction.get(doc.ref);
+      if (!fresh.exists || fresh.data().serverManaged === true) { skipped = true; return; }
+      const freshState = engine.normalizeState(fresh.data(), 0);
+      freshState.lastMiningAt = Date.now();
+      writtenSummary = summary(freshState);
+      transaction.set(doc.ref, { ...freshState, serverManaged: true, schema: 2, migratedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    });
+    if (skipped) { report.alreadyMigrated += 1; report.toMigrate -= 1; continue; }
     report.migrated += 1;
     const after = summary(engine.normalizeState((await doc.ref.get()).data(), 0));
-    if (JSON.stringify(after) === JSON.stringify(before)) report.verifiedOk += 1;
-    else report.problems.push(`${doc.id}: verification mismatch ${JSON.stringify(before)} vs ${JSON.stringify(after)}`);
+    if (JSON.stringify(after) === JSON.stringify(writtenSummary)) report.verifiedOk += 1;
+    else report.problems.push(`${doc.id}: verification mismatch ${JSON.stringify(writtenSummary)} vs ${JSON.stringify(after)}`);
   }
 
   if (APPLY) {
@@ -90,7 +103,12 @@ async function main() {
   }
 
   fs.writeFileSync(path.join(dir, "migration-report.json"), JSON.stringify({ apply: APPLY, ...report }, null, 2));
-  console.log(JSON.stringify({ apply: APPLY, ...report, catalogDifferences: report.catalogDifferences.length + " (see report file)" }, null, 2));
+  console.log(JSON.stringify({
+    apply: APPLY, total: report.total, alreadyMigrated: report.alreadyMigrated, toMigrate: report.toMigrate,
+    migrated: report.migrated, verifiedOk: report.verifiedOk,
+    catalogDifferences: report.catalogDifferences.length,
+    problems: report.problems.map((line) => line.replace(/^([^:]{6})[^:]*:/, (_m, head) => head + "…:"))
+  }, null, 2));
   if (report.problems.length) process.exitCode = 1;
 }
 

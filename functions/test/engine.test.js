@@ -223,3 +223,9 @@ test("podium ranks by cash + CRYP x rate + Blue x rate, keeps only 10 and never 
   assert.ok(board.every((row) => !("uid" in row)));
   assert.deepEqual(board.map((row) => row.rank), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
+
+test("only real actions are accepted: names from Object.prototype are rejected before anything is written", () => {
+  for (const type of ["constructor", "toString", "hasOwnProperty", "__proto__", "valueOf", 5, null]) {
+    assert.throws(() => E.applyAction(E.newState(T0), { type, payload: {}, opId: "op-proto-0001" }, ctxAt(T0 + 1000)), (e) => e.code === "invalid-argument", String(type));
+  }
+});
