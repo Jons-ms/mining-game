@@ -15,6 +15,7 @@ const { setGlobalOptions } = require("firebase-functions/v2");
 const admin = require("firebase-admin");
 const engine = require("./lib/engine.js");
 const bank = require("./lib/bank.js");
+const podium = require("./lib/podium.js");
 
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.firestore();
@@ -167,23 +168,8 @@ exports.openBankAccount = onCall(async (request) => {
   }
 });
 
-// Hourly Podium snapshot: one query, one write. Rates are read at the moment of the snapshot.
-async function buildPodiumSnapshot() {
-  const [players, cryp, blue] = await Promise.all([
-    db.collection(PLAYERS).where("serverManaged", "==", true).get(),
-    db.collection("market").doc("exchangeRate").get(),
-    db.collection("market").doc("blueExchangeRate").get()
-  ]);
-  const rates = {
-    cryp: cryp.exists ? Number(cryp.data().price) : 0.25,
-    blue: blue.exists ? Number(blue.data().price) : 4.25
-  };
-  const entries = engine.buildPodium(players.docs.map((doc) => ({ uid: doc.id, state: doc.data() })), rates);
-  await db.collection("podium").doc("current").set({
-    entries, rates, playerCount: players.size, updatedAt: FieldValue.serverTimestamp()
-  });
-  return entries.length;
-}
+// Hourly Podium snapshot (logic in lib/podium.js, shared with the migration script).
+const buildPodiumSnapshot = () => podium.buildPodiumSnapshot(db, FieldValue);
 exports.buildPodiumSnapshot = buildPodiumSnapshot;
 
 exports.hourlyPodium = onSchedule({ schedule: "every 60 minutes", timeZone: "Europe/Kyiv", retryCount: 1 }, async () => {

@@ -4,7 +4,7 @@
  * One-time migration of existing players to the server-managed format.
  *
  *   cd functions && npm install && cd ..
- *   export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
+ *   (credentials come from Application Default Credentials: GitHub Actions provides them through Workload Identity Federation)
  *   node scripts/migrate-players.js            # dry run: backup + report, writes nothing
  *   node scripts/migrate-players.js --apply    # migrates, then verifies every player
  *
@@ -17,8 +17,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createRequire } = require("node:module");
 const requireFromFunctions = createRequire(path.join(__dirname, "..", "functions", "package.json"));
-const admin = requireFromFunctions("firebase-admin");
+// Plain Firestore client (not the Admin SDK): it works with Workload Identity Federation credentials, so CI needs no key.
+const { Firestore, FieldValue } = requireFromFunctions("@google-cloud/firestore");
 const engine = require("../functions/lib/engine.js");
+const { buildPodiumSnapshot } = require("../functions/lib/podium.js");
 
 const APPLY = process.argv.includes("--apply");
 const BACKUP_COLLECTIONS = ["players", "podiumPlayers", "bankAccounts", "cardNumbers", "market"];
@@ -48,8 +50,7 @@ const summary = (s) => ({
 });
 
 async function main() {
-  admin.initializeApp();
-  const db = admin.firestore();
+  const db = new Firestore();
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dir = path.join(__dirname, "..", "backups", stamp);
@@ -88,7 +89,7 @@ async function main() {
       const freshState = engine.normalizeState(fresh.data(), 0);
       freshState.lastMiningAt = Date.now();
       writtenSummary = summary(freshState);
-      transaction.set(doc.ref, { ...freshState, serverManaged: true, schema: 2, migratedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      transaction.set(doc.ref, { ...freshState, serverManaged: true, schema: 2, migratedAt: FieldValue.serverTimestamp() }, { merge: true });
     });
     if (skipped) { report.alreadyMigrated += 1; report.toMigrate -= 1; continue; }
     report.migrated += 1;
@@ -98,8 +99,7 @@ async function main() {
   }
 
   if (APPLY) {
-    const { buildPodiumSnapshot } = requireFromFunctions("./index.js");
-    console.log(`podium snapshot written (${await buildPodiumSnapshot()} rows)`);
+    console.log(`podium snapshot written (${await buildPodiumSnapshot(db, FieldValue)} rows)`);
   }
 
   fs.writeFileSync(path.join(dir, "migration-report.json"), JSON.stringify({ apply: APPLY, ...report }, null, 2));
