@@ -5,37 +5,56 @@
  *
  *   cd functions && npm install && cd ..
  *   (credentials come from Application Default Credentials: GitHub Actions provides them through Workload Identity Federation)
- *   node scripts/migrate-players.js            # dry run: backup + report, writes nothing
- *   node scripts/migrate-players.js --apply    # migrates, then verifies every player
+ *   node scripts/migrate-players.js            # dry run: checks every player, writes NOTHING
+ *   node scripts/migrate-players.js --apply    # checks every player first; writes only if that check is completely clean
  *
- * It never deletes anything. A JSON backup of the affected collections is written to backups/<timestamp>/ first
- * (also take a full Firestore export before --apply). Run it again after the site is published: it is idempotent.
- * Re-running is safe: players that are already migrated are skipped, and each player is keyed by its Firebase UID,
- * so no duplicates can appear.
+ * How the "no writes if anything is wrong" rule is enforced:
+ *   1. PREFLIGHT. All players are read once and checked by checkPlayer(), a pure function over plain data: it has no
+ *      database handle, so it cannot write. The dry run is exactly this phase.
+ *   2. If a single problem or catalog difference is found, the run ends right there (exit code 1). In --apply mode no
+ *      player and no Podium document is written either.
+ *   3. Only a clean preflight reaches the write phase. Each player is then written in its own transaction that reads the
+ *      FRESH document and runs checkPlayer() again (card count and catalog match) before the write. A failed check, a
+ *      failed verification or any Firestore error stops the run at once: the remaining players and the Podium are
+ *      not touched.
+ *   4. Re-running is safe: players that are already server-managed are skipped, each player is keyed by its Firebase
+ *      UID (no duplicates) and nothing is ever deleted.
+ *
+ * Privacy: the repository is public and so are the CI logs. Nothing is written to disk (no backup files, no report
+ * files, nothing to upload as an artifact) and the console output never contains UIDs, nicknames or per-player
+ * balances. Players appear as "player #N", where N is the position in the Firestore document-ID order, so the owner can
+ * find the document in the console (players collection, sorted by document ID). The primary backup is the full Firestore
+ * export made by the workflow step `backup`, which stays inside Google Cloud.
  */
-const fs = require("node:fs");
 const path = require("node:path");
 const { createRequire } = require("node:module");
-const requireFromFunctions = createRequire(path.join(__dirname, "..", "functions", "package.json"));
-// Plain Firestore client (not the Admin SDK): it works with Workload Identity Federation credentials, so CI needs no key.
-const { Firestore, FieldValue } = requireFromFunctions("@google-cloud/firestore");
 const engine = require("../functions/lib/engine.js");
 const { buildPodiumSnapshot } = require("../functions/lib/podium.js");
 
-const APPLY = process.argv.includes("--apply");
-const BACKUP_COLLECTIONS = ["players", "podiumPlayers", "bankAccounts", "cardNumbers", "market"];
-// The repository is public and so are CI logs: console output never contains full UIDs; details go to the report file.
+const MAX_PRINTED_ISSUES = 50;
 
-function plain(value) {
-  return JSON.parse(JSON.stringify(value, (key, v) => (v && typeof v.toDate === "function" ? v.toDate().toISOString() : v)));
+// Raised inside the write transaction when the fresh document fails the check: the transaction is rolled back.
+class MigrationAbort extends Error {}
+
+// Text that comes from player documents (card ids, error messages) is cut to printable ASCII before it reaches the log.
+const safe = (value) => String(value).replace(/[^\x20-\x7E]/g, "?").slice(0, 80);
+
+function summary(state) {
+  return {
+    cash: state.cash, cryp: state.cryp, blue: state.blue,
+    farm: state.slots.filter(Boolean).length, extra: state.extraSlots.filter(Boolean).length, inventory: state.inventory.length,
+    hasExtraField: state.hasExtraField, unlocked: state.extraUnlockedSlots.filter(Boolean).length
+  };
 }
 
-function catalogMismatches(uid, state) {
+function catalogMismatches(state) {
   const found = [];
   const check = (gpu, where) => {
     const type = engine.GPU_TYPES.find((t) => t.id === gpu.id);
-    if (!type) found.push(`${uid}: unknown card id "${gpu.id}" (${where})`);
-    else if (gpu.rate !== type.rate || gpu.cost !== type.price) found.push(`${uid}: ${gpu.id} (${where}) rate=${gpu.rate} cost=${gpu.cost}, catalog rate=${type.rate} price=${type.price}`);
+    if (!type) found.push(`unknown card id "${safe(gpu.id)}" (${where})`);
+    else if (gpu.rate !== type.rate || gpu.cost !== type.price) {
+      found.push(`${safe(gpu.id)} (${where}) rate=${gpu.rate} cost=${gpu.cost}, catalog rate=${type.rate} price=${type.price}`);
+    }
   };
   state.slots.forEach((g) => g && check(g, "farm"));
   state.extraSlots.forEach((g) => g && check(g, "extra field"));
@@ -43,73 +62,144 @@ function catalogMismatches(uid, state) {
   return found;
 }
 
-const summary = (s) => ({
-  cash: s.cash, cryp: s.cryp, blue: s.blue,
-  farm: s.slots.filter(Boolean).length, extra: s.extraSlots.filter(Boolean).length, inventory: s.inventory.length,
-  hasExtraField: s.hasExtraField, unlocked: s.extraUnlockedSlots.filter(Boolean).length
-});
-
-async function main() {
-  const db = new Firestore();
-
-  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const dir = path.join(__dirname, "..", "backups", stamp);
-  fs.mkdirSync(dir, { recursive: true });
-  for (const name of BACKUP_COLLECTIONS) {
-    const snap = await db.collection(name).get();
-    fs.writeFileSync(path.join(dir, name + ".json"), JSON.stringify(snap.docs.map((d) => ({ id: d.id, data: plain(d.data()) })), null, 2));
-    console.log(`backup: ${name} -> ${snap.size} documents`);
+// Pure check of one raw player document. Used for the preflight AND again on the fresh document inside the write
+// transaction. Returns plain data; it never touches the database.
+function checkPlayer(raw) {
+  let state;
+  try {
+    state = engine.normalizeState(raw, 0);
+  } catch (error) {
+    return { state: null, summary: null, problems: [`normalisation failed: ${safe(error && error.message)}`], catalogDifferences: [] };
   }
-  console.log(`backup folder: ${dir}`);
-
-  const players = await db.collection("players").get();
-  const report = { total: players.size, alreadyMigrated: 0, toMigrate: 0, migrated: 0, verifiedOk: 0, problems: [], catalogDifferences: [] };
-
-  for (const doc of players.docs) {
-    const raw = doc.data();
-    if (raw.serverManaged === true) { report.alreadyMigrated += 1; continue; }
-    report.toMigrate += 1;
-    const state = engine.normalizeState(raw, 0);
-    const before = summary(state);
-    report.catalogDifferences.push(...catalogMismatches(doc.id, state));
-    // sanity: normalisation must not lose cards
-    const rawCards = [].concat(raw.slots || [], raw.extraSlots || [], raw.inventory || []).filter(Boolean).length;
-    const stateCards = before.farm + before.extra + before.inventory;
-    if (rawCards !== stateCards) report.problems.push(`${doc.id}: card count ${rawCards} -> ${stateCards}`);
-    if (!APPLY) continue;
-
-    // The write happens in a transaction on the FRESH document: if the player saved in the meantime, Firestore
-    // retries with the new data, and a document that became server-managed meanwhile is left alone.
-    let skipped = false;
-    let writtenSummary = null;
-    await db.runTransaction(async (transaction) => {
-      skipped = false;
-      const fresh = await transaction.get(doc.ref);
-      if (!fresh.exists || fresh.data().serverManaged === true) { skipped = true; return; }
-      const freshState = engine.normalizeState(fresh.data(), 0);
-      freshState.lastMiningAt = Date.now();
-      writtenSummary = summary(freshState);
-      transaction.set(doc.ref, { ...freshState, serverManaged: true, schema: 2, migratedAt: FieldValue.serverTimestamp() }, { merge: true });
-    });
-    if (skipped) { report.alreadyMigrated += 1; report.toMigrate -= 1; continue; }
-    report.migrated += 1;
-    const after = summary(engine.normalizeState((await doc.ref.get()).data(), 0));
-    if (JSON.stringify(after) === JSON.stringify(writtenSummary)) report.verifiedOk += 1;
-    else report.problems.push(`${doc.id}: verification mismatch ${JSON.stringify(writtenSummary)} vs ${JSON.stringify(after)}`);
-  }
-
-  if (APPLY) {
-    console.log(`podium snapshot written (${await buildPodiumSnapshot(db, FieldValue)} rows)`);
-  }
-
-  fs.writeFileSync(path.join(dir, "migration-report.json"), JSON.stringify({ apply: APPLY, ...report }, null, 2));
-  console.log(JSON.stringify({
-    apply: APPLY, total: report.total, alreadyMigrated: report.alreadyMigrated, toMigrate: report.toMigrate,
-    migrated: report.migrated, verifiedOk: report.verifiedOk,
-    catalogDifferences: report.catalogDifferences.length,
-    problems: report.problems.map((line) => line.replace(/^([^:]{6})[^:]*:/, (_m, head) => head + "…:"))
-  }, null, 2));
-  if (report.problems.length) process.exitCode = 1;
+  const sum = summary(state);
+  const problems = [];
+  // normalisation must not lose cards
+  const rawCards = [].concat(raw.slots || [], raw.extraSlots || [], raw.inventory || []).filter(Boolean).length;
+  const stateCards = sum.farm + sum.extra + sum.inventory;
+  if (rawCards !== stateCards) problems.push(`card count ${rawCards} -> ${stateCards}`);
+  return { state, summary: sum, problems, catalogDifferences: catalogMismatches(state) };
 }
 
-main().catch((error) => { console.error(error); process.exit(1); });
+function newReport(apply, total) {
+  return {
+    mode: apply ? "apply" : "dry-run",
+    result: "ok",
+    players: { total, alreadyMigrated: 0, toMigrate: 0, migrated: 0, verifiedOk: 0, goneBeforeWrite: 0 },
+    totalsToMigrate: { cash: 0, cryp: 0, blue: 0, farmCards: 0, extraFieldCards: 0, inventoryCards: 0, cardsByType: {} },
+    problems: [], catalogDifferences: [],
+    stopped: null,
+    writes: { playerDocuments: 0, podiumSnapshot: false },
+    exitCode: 0
+  };
+}
+
+function addTotals(totals, sum, state) {
+  totals.cash = engine.roundCash(totals.cash + sum.cash);
+  totals.cryp = engine.roundCoin(totals.cryp + sum.cryp);
+  totals.blue = engine.roundCoin(totals.blue + sum.blue);
+  totals.farmCards += sum.farm;
+  totals.extraFieldCards += sum.extra;
+  totals.inventoryCards += sum.inventory;
+  for (const gpu of [].concat(state.slots, state.extraSlots, state.inventory)) {
+    if (gpu) totals.cardsByType[safe(gpu.id)] = (totals.cardsByType[safe(gpu.id)] || 0) + 1;
+  }
+}
+
+// WRITE PHASE, one player. Only reachable from run() after a clean preflight.
+async function migrateOne(db, FieldValue, doc, label, report) {
+  let outcome;
+  await db.runTransaction(async (transaction) => {
+    outcome = { skipped: null, written: null };
+    const fresh = await transaction.get(doc.ref);
+    if (!fresh.exists) { outcome.skipped = "gone"; return; }
+    if (fresh.data().serverManaged === true) { outcome.skipped = "already"; return; }
+    // The player may have saved since the preflight: check the FRESH document again before writing anything.
+    const check = checkPlayer(fresh.data());
+    const issues = check.problems.concat(check.catalogDifferences);
+    if (issues.length) throw new MigrationAbort(`${label}: the document failed the check right before writing: ${issues.join("; ")}`);
+    check.state.lastMiningAt = Date.now(); // no mining credit for the time before the migration
+    outcome.written = check.summary;
+    transaction.set(doc.ref, { ...check.state, serverManaged: true, schema: 2, migratedAt: FieldValue.serverTimestamp() }, { merge: true });
+  });
+  if (outcome.skipped === "gone") { report.players.goneBeforeWrite += 1; report.players.toMigrate -= 1; return; }
+  if (outcome.skipped === "already") { report.players.alreadyMigrated += 1; report.players.toMigrate -= 1; return; }
+  report.players.migrated += 1;
+  report.writes.playerDocuments += 1;
+  const after = summary(engine.normalizeState((await doc.ref.get()).data(), 0));
+  const differing = Object.keys(outcome.written).filter((key) => JSON.stringify(after[key]) !== JSON.stringify(outcome.written[key]));
+  if (differing.length) throw new MigrationAbort(`${label}: verification after writing failed, fields differ: ${differing.join(", ")}`);
+  report.players.verifiedOk += 1;
+}
+
+async function run({ db, FieldValue, apply = false, log = console.log }) {
+  const snapshot = await db.collection("players").get();
+  const docs = snapshot.docs.slice().sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const report = newReport(apply, docs.length);
+  const redact = (text) => docs.reduce((out, doc, index) => out.split(doc.id).join(`player #${index + 1}`), safe(text));
+
+  // ---- PREFLIGHT: read-only, over plain data, covers every player before anything is written ----
+  const pending = [];
+  docs.forEach((doc, index) => {
+    const label = `player #${index + 1}`;
+    const raw = doc.data();
+    if (raw.serverManaged === true) { report.players.alreadyMigrated += 1; return; }
+    report.players.toMigrate += 1;
+    const check = checkPlayer(raw);
+    check.problems.forEach((line) => report.problems.push(`${label}: ${line}`));
+    check.catalogDifferences.forEach((line) => report.catalogDifferences.push(`${label}: ${line}`));
+    if (check.state) addTotals(report.totalsToMigrate, check.summary, check.state);
+    pending.push({ doc, label });
+  });
+
+  if (report.problems.length || report.catalogDifferences.length) {
+    report.result = "blocked: nothing was written";
+    report.exitCode = 1;
+  } else if (apply) {
+    // ---- WRITE PHASE: only a completely clean preflight gets here; the first failure stops everything ----
+    let current = null;
+    try {
+      for (const entry of pending) {
+        current = entry.label;
+        await migrateOne(db, FieldValue, entry.doc, entry.label, report);
+      }
+      current = "podium snapshot";
+      report.writes.podiumSnapshot = (await buildPodiumSnapshot(db, FieldValue)) >= 0;
+    } catch (error) {
+      report.result = "stopped: the remaining players and the Podium were not touched";
+      report.stopped = { at: current, reason: redact(error instanceof MigrationAbort ? error.message : `${error && error.code ? error.code + ": " : ""}${error && error.message}`) };
+      report.exitCode = 1;
+    }
+  }
+
+  print(report, log);
+  return report;
+}
+
+function print(report, log) {
+  const clip = (list) => (list.length > MAX_PRINTED_ISSUES ? list.slice(0, MAX_PRINTED_ISSUES).concat(`... and ${list.length - MAX_PRINTED_ISSUES} more`) : list);
+  log(JSON.stringify({ ...report, problems: clip(report.problems), catalogDifferences: clip(report.catalogDifferences) }, null, 2));
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  if (args.some((arg) => arg !== "--apply")) {
+    console.error("Usage: node scripts/migrate-players.js [--apply]");
+    process.exitCode = 2;
+    return;
+  }
+  // Plain Firestore client (not the Admin SDK): it works with Workload Identity Federation credentials, so CI needs no key.
+  const requireFromFunctions = createRequire(path.join(__dirname, "..", "functions", "package.json"));
+  const { Firestore, FieldValue } = requireFromFunctions("@google-cloud/firestore");
+  const report = await run({ db: new Firestore(), FieldValue, apply: args.includes("--apply") });
+  process.exitCode = report.exitCode;
+}
+
+module.exports = { run, checkPlayer, MigrationAbort };
+
+if (require.main === module) {
+  main().catch((error) => {
+    // Only the code and message: the full error object can carry document paths.
+    console.error(`Migration failed before finishing: ${error && error.code ? error.code + ": " : ""}${safe(error && error.message)}`);
+    process.exit(1);
+  });
+}
