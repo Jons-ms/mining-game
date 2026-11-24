@@ -1,0 +1,193 @@
+name: Deploy Firebase
+
+# Manual only, and every run must be approved by the owner in the "production" environment before it gets any
+# Google credentials. One step per run (see docs/DEPLOY.md). There are NO long-lived keys: Google access comes
+# from GitHub OIDC (Workload Identity Federation). Google accepts the token only if ALL of these hold in the token:
+# repository Jons-ms/mining-game, workflow_ref = this file on refs/heads/main, ref = refs/heads/main,
+# event_name = workflow_dispatch, environment = production (the provider condition is in docs/DEPLOY.md, step 1.3).
+# The repository is public, so logs are public: nothing here prints secrets or player data, and NOTHING is uploaded
+# as an artifact (never add actions/upload-artifact to this file: player data must not leave Google Cloud).
+#
+# The code that runs is pinned to ONE commit: the input commit_sha, a full 40-character SHA. A branch name is not
+# accepted, so the code cannot change between the owner's review and the run. The guard job refuses a SHA that is not
+# part of the history of server-migration or main in THIS repository (GitHub also serves commits from forks by SHA).
+#
+# Nothing here can delete functions or data: deploys name the functions explicitly and never use --force
+# (without --force the Firebase CLI refuses to delete functions in non-interactive mode).
+# The only --force in this file belongs to the separate, optional set-image-cleanup step (see the comment there).
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Step to run"
+        type: choice
+        required: true
+        options:
+          - backup
+          - migrate-dry-run
+          - deploy-functions
+          - set-image-cleanup
+          - deploy-rules
+          - migrate-apply
+      confirm:
+        description: "Type the step name again to confirm (for example: deploy-rules)"
+        type: string
+        required: true
+      commit_sha:
+        description: "Full 40-character SHA of the reviewed commit (must be in server-migration or main)"
+        type: string
+        required: true
+
+# No permissions by default; each job asks only for what it needs.
+permissions: {}
+
+concurrency:
+  group: firebase-deploy
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    # Cheap checks that fail BEFORE the approval request is sent and before any credential exists.
+    # It also prints what the owner is about to approve (this log is visible while the run waits for approval).
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      # Full history of all branches of this repository, so the SHA can be checked against them.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate the request
+        env:
+          STEP: ${{ inputs.action }}
+          CONFIRM: ${{ inputs.confirm }}
+          CODE_SHA: ${{ inputs.commit_sha }}
+          RUN_REF: ${{ github.ref }}
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          REPO: ${{ github.repository }}
+        run: |
+          fail() { echo "::error::$1"; exit 1; }
+          [ "$RUN_REF" = "refs/heads/main" ] || fail "Run this workflow from the main branch (got $RUN_REF)."
+          [ "$ACTOR" = "$OWNER" ] || fail "Only the repository owner can run it."
+          [ "$CONFIRM" = "$STEP" ] || fail "Confirmation does not match: type exactly '$STEP' in the 'confirm' field."
+          case "$STEP" in backup|migrate-dry-run|deploy-functions|set-image-cleanup|deploy-rules|migrate-apply) ;; *) fail "Unknown step." ;; esac
+
+          printf '%s' "$CODE_SHA" | grep -Eq '^[0-9a-f]{40}$' || fail "commit_sha must be the full 40-character lowercase hex SHA. A branch name or a short SHA is not accepted."
+          git cat-file -e "${CODE_SHA}^{commit}" 2>/dev/null || fail "This commit is not in any branch of this repository."
+          if git merge-base --is-ancestor "$CODE_SHA" origin/server-migration 2>/dev/null; then WHERE="server-migration"
+          elif git merge-base --is-ancestor "$CODE_SHA" origin/main 2>/dev/null; then WHERE="main"
+          else fail "This commit is not part of the history of server-migration or main."; fi
+
+          {
+            echo "### Waiting for your approval in the production environment"
+            echo ""
+            echo "- Step: \`$STEP\`"
+            echo "- Commit: \`$CODE_SHA\` (in history of \`$WHERE\`)"
+            echo "- Subject: $(git log -1 --format=%s "$CODE_SHA" | cut -c1-150)"
+            echo "- Committed: $(git log -1 --format=%cI "$CODE_SHA")"
+            if [ "$WHERE" = "server-migration" ] && [ "$(git rev-parse origin/server-migration)" != "$CODE_SHA" ]; then
+              echo "- Note: this is NOT the newest commit of server-migration (newest: \`$(git rev-parse origin/server-migration)\`)."
+            fi
+            echo "- Review exactly this code: https://github.com/$REPO/commit/$CODE_SHA"
+            echo ""
+            echo "Approve only if this SHA is the one you reviewed."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+  run:
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Required reviewer on this environment = the owner. Nothing below starts until it is approved.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STEP: ${{ inputs.action }}
+      CODE_SHA: ${{ inputs.commit_sha }}
+      PROJECT_ID: cryp-togame
+      STORAGE_BUCKET: cryp-togame.firebasestorage.app
+      FUNCTIONS_REGION: europe-west1
+      # The ONLY functions this workflow deploys. Must be exactly the Cloud Functions exported by functions/index.js:
+      # scripts/check-deploy-functions.js loads the real code and compares (see the deploy-functions step).
+      DEPLOY_ONLY: functions:initPlayer,functions:gameAction,functions:heartbeat,functions:openBankAccount,functions:hourlyPodium
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.commit_sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Confirm the checked-out code is exactly the reviewed commit
+        run: |
+          [ "$(git rev-parse HEAD)" = "$CODE_SHA" ] || { echo "::error::The checked-out commit differs from commit_sha."; exit 1; }
+          echo "Step:    $STEP"
+          echo "Commit:  $CODE_SHA"
+          echo "Project: $PROJECT_ID"
+
+      # Dependencies and tests run BEFORE any Google credential exists, so the test code never runs with access to production.
+      - name: Install dependencies
+        if: ${{ env.STEP == 'deploy-functions' || startsWith(env.STEP, 'migrate') }}
+        run: npm install --prefix functions --no-audit --no-fund --ignore-scripts
+
+      - name: Run server tests before touching Firebase
+        if: ${{ env.STEP == 'deploy-functions' || startsWith(env.STEP, 'migrate') }}
+        run: npm test --prefix functions
+
+      # Migration steps use a separate account that can only read/write Firestore data;
+      # everything else uses the deploy account. Neither has a key.
+      - name: Authenticate to Google Cloud (keyless)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ startsWith(inputs.action, 'migrate') && vars.GCP_MIGRATOR_SA || vars.GCP_DEPLOYER_SA }}
+          create_credentials_file: true
+          export_environment_variables: true
+
+      - name: Install Firebase CLI (pinned)
+        if: ${{ env.STEP == 'deploy-functions' || env.STEP == 'set-image-cleanup' || env.STEP == 'deploy-rules' }}
+        run: npm install -g firebase-tools@15.37.0 --ignore-scripts
+
+      - name: Run the step
+        run: |
+          case "$STEP" in
+            backup)
+              # The primary backup: a full Firestore export that stays inside Google Cloud.
+              DEST="gs://$STORAGE_BUCKET/backups/firestore-$(date -u +%Y%m%d-%H%M%S)"
+              gcloud firestore export "$DEST" --project="$PROJECT_ID"
+              echo "Backup written to $DEST" ;;
+            migrate-dry-run)
+              # Checks every player and prints an anonymous report ("player #N", no UIDs, no nicknames, no balances per player).
+              # Writes nothing to Firestore and no file on the runner. Fails (exit 1) when --apply would be blocked.
+              node scripts/migrate-players.js ;;
+            deploy-functions)
+              # 1) DEPLOY_ONLY must equal the Cloud Functions the code really exports, so nothing is silently skipped or added.
+              #    The script loads functions/index.js and compares the exports the Firebase SDK marked as functions.
+              node scripts/check-deploy-functions.js "$DEPLOY_ONLY" || { echo "::error::DEPLOY_ONLY does not match the functions in functions/index.js"; exit 1; }
+              # 2) Read-only look at what already exists in production (public log: function names only).
+              echo "Functions that already exist in $PROJECT_ID:"
+              firebase functions:list --project "$PROJECT_ID" --non-interactive
+              # 3) Deploy ONLY the named functions, without --force. In non-interactive mode the Firebase CLI aborts instead of
+              #    deleting any function that is missing from the code, and --only keeps every other function out of the plan.
+              firebase deploy --only "$DEPLOY_ONLY" --project "$PROJECT_ID" --non-interactive ;;
+            set-image-cleanup)
+              # Optional. Sets the Artifact Registry cleanup policy (old build images are deleted after 7 days) for the functions
+              # repository. This is the only command here with --force; it makes the CLI skip its confirmation for creating
+              # that cleanup policy and cannot touch functions or Firestore data. Needs the extra role from docs/DEPLOY.md.
+              firebase functions:artifacts:setpolicy --days 7 --location "$FUNCTIONS_REGION" --force --project "$PROJECT_ID" --non-interactive ;;
+            deploy-rules)
+              firebase deploy --only firestore:rules --project "$PROJECT_ID" --non-interactive ;;
+            migrate-apply)
+              # Checks EVERY player first; if anything is wrong it exits with code 1 before the first write.
+              node scripts/migrate-players.js --apply ;;
+            *)
+              echo "::error::Unknown step: $STEP"; exit 1 ;;
+          esac
