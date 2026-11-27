@@ -12,17 +12,28 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { setGlobalOptions } = require("firebase-functions/v2");
-const admin = require("firebase-admin");
+const { getApps, initializeApp } = require("firebase-admin/app");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 const engine = require("./lib/engine.js");
 const bank = require("./lib/bank.js");
 const podium = require("./lib/podium.js");
 
-if (!admin.apps.length) admin.initializeApp();
-const db = admin.firestore();
+// The Admin SDK is started on first use, never while this file is loaded. Loading must not touch credentials:
+// the deploy workflow (scripts/check-deploy-functions.js) and the Firebase CLI load this file while
+// GOOGLE_APPLICATION_CREDENTIALS points to a keyless Workload Identity Federation file (type "external_account"),
+// which Admin SDK 12 rejects with "Invalid contents in the credentials file". In production the SDK
+// picks up the function's own service account when the first request arrives.
+let firestoreInstance = null;
+function getDb() {
+  if (!firestoreInstance) {
+    if (!getApps().length) initializeApp();
+    firestoreInstance = getFirestore();
+  }
+  return firestoreInstance;
+}
 setGlobalOptions({ region: "europe-west1", maxInstances: 5, memory: "256MiB" });
 
 const PLAYERS = "players";
-const FieldValue = admin.firestore.FieldValue;
 
 function requireUid(request) {
   if (!request.auth || !request.auth.uid) throw new HttpsError("unauthenticated", "Потрібен вхід в акаунт.");
@@ -48,8 +59,8 @@ function storedDoc(state) {
 
 async function readRates(transaction) {
   const [cryp, blue] = await Promise.all([
-    transaction.get(db.collection("market").doc("exchangeRate")),
-    transaction.get(db.collection("market").doc("blueExchangeRate"))
+    transaction.get(getDb().collection("market").doc("exchangeRate")),
+    transaction.get(getDb().collection("market").doc("blueExchangeRate"))
   ]);
   return {
     cryp: cryp.exists ? Number(cryp.data().price) : NaN,
@@ -63,8 +74,8 @@ async function readRates(transaction) {
 exports.initPlayer = onCall(async (request) => {
   const uid = requireUid(request);
   try {
-    const ref = db.collection(PLAYERS).doc(uid);
-    const result = await db.runTransaction(async (transaction) => {
+    const ref = getDb().collection(PLAYERS).doc(uid);
+    const result = await getDb().runTransaction(async (transaction) => {
       const nowMs = Date.now();
       const snapshot = await transaction.get(ref);
       if (snapshot.exists && snapshot.data().serverManaged === true) {
@@ -97,8 +108,8 @@ exports.gameAction = onCall(async (request) => {
   const uid = requireUid(request);
   const data = request.data || {};
   try {
-    const ref = db.collection(PLAYERS).doc(uid);
-    const result = await db.runTransaction(async (transaction) => {
+    const ref = getDb().collection(PLAYERS).doc(uid);
+    const result = await getDb().runTransaction(async (transaction) => {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists || snapshot.data().serverManaged !== true) {
         throw new engine.GameError("failed-precondition", "Збереження ще не підключено до сервера. Перезавантаж гру.");
@@ -120,8 +131,8 @@ exports.gameAction = onCall(async (request) => {
 exports.heartbeat = onCall(async (request) => {
   const uid = requireUid(request);
   try {
-    const ref = db.collection(PLAYERS).doc(uid);
-    const result = await db.runTransaction(async (transaction) => {
+    const ref = getDb().collection(PLAYERS).doc(uid);
+    const result = await getDb().runTransaction(async (transaction) => {
       const snapshot = await transaction.get(ref);
       if (!snapshot.exists || snapshot.data().serverManaged !== true) {
         throw new engine.GameError("failed-precondition", "Збереження ще не підключено до сервера.");
@@ -148,11 +159,11 @@ exports.openBankAccount = onCall(async (request) => {
     throw new HttpsError("invalid-argument", "Невідома валюта.");
   }
   try {
-    const accountRef = db.collection("bankAccounts").doc(bank.accountId(uid, currency));
+    const accountRef = getDb().collection("bankAccounts").doc(bank.accountId(uid, currency));
     for (let attempt = 1; attempt <= MAX_CARD_ATTEMPTS; attempt += 1) {
       const cardNumber = bank.generateCardNumber(currency);
-      const cardRef = db.collection("cardNumbers").doc(cardNumber);
-      const result = await db.runTransaction(async (transaction) => {
+      const cardRef = getDb().collection("cardNumbers").doc(cardNumber);
+      const result = await getDb().runTransaction(async (transaction) => {
         const [account, card] = await Promise.all([transaction.get(accountRef), transaction.get(cardRef)]);
         if (account.exists) return { cardNumber: account.data().cardNumber, created: false };
         if (card.exists) return null; // number taken: try another one
@@ -169,7 +180,7 @@ exports.openBankAccount = onCall(async (request) => {
 });
 
 // Hourly Podium snapshot (logic in lib/podium.js, shared with the migration script).
-const buildPodiumSnapshot = () => podium.buildPodiumSnapshot(db, FieldValue);
+const buildPodiumSnapshot = () => podium.buildPodiumSnapshot(getDb(), FieldValue);
 exports.buildPodiumSnapshot = buildPodiumSnapshot;
 
 exports.hourlyPodium = onSchedule({ schedule: "every 60 minutes", timeZone: "Europe/Kyiv", retryCount: 1 }, async () => {
