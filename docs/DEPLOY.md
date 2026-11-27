@@ -35,7 +35,7 @@
 
 Додатково для `firebase-deployer`, лише на конкретні ресурси:
 - **Service Account User** (`roles/iam.serviceAccountUser`) **на акаунті `PROJECT_NUMBER-compute@developer.gserviceaccount.com`**: [Service accounts](https://console.cloud.google.com/iam-admin/serviceaccounts?project=cryp-togame) → відкрийте його → вкладка **Principals with access → Grant access**. Це право `actAs` на акаунт виконання функцій (документація вимагає його для того, хто розгортає). Роль видається на один акаунт, а не на весь проєкт.
-- **Storage Admin** (`roles/storage.admin`) **лише на бакеті** `cryp-togame.firebasestorage.app` ([Buckets](https://console.cloud.google.com/storage/browser?project=cryp-togame) → бакет → **Permissions → Grant access**): за документацією експорт Firestore вимагає запису до сховища. Службовий акаунт самого Firestore має доступ до бакета в тому самому проєкті за замовчуванням.
+- **Storage Admin** (`roles/storage.admin`) **лише на окремому backup-бакеті** `cryp-togame-firestore-backups` ([Buckets](https://console.cloud.google.com/storage/browser?project=cryp-togame) → бакет → **Permissions → Grant access**). Бакет створений у Multi-region `eu`, сумісному з розташуванням Firestore. Не використовуйте `cryp-togame.firebasestorage.app` для експорту: він розташований у `us-east1` і несумісний із цією Firestore-базою.
 
 Чи потрібен Service Account User ще й на акаунті Cloud Build? Залежить від віку проєкту:
 - Проєкти, створені **після липня 2024**, збирають код від імені того ж `PROJECT_NUMBER-compute@developer.gserviceaccount.com`, тож окремий дозвіл не потрібен: достатньо пункту вище.
