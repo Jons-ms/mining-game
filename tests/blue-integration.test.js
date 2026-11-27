@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const vm = require('node:vm');
+const engine = require('../functions/lib/engine.js');
 
 function makeElement(id = '') {
   return {
@@ -132,6 +133,8 @@ function createGame() {
       setSellCurrency,
       sellBlue,
       sellCRYP,
+      sellCurrency,
+      purchaseExtraField,
       gameNow: () => Date.now(),
       updateSellPreview,
       normalizedMarketState,
@@ -146,7 +149,9 @@ function createGame() {
       setUID: (value) => { currentUserUID = value; },
       setDatabase: (db) => { window.crypFirebase = { db }; },
       setSaveKey: (key) => { SAVE_KEY = key; },
-      setCloudSaveReady: (value) => { cloudSaveReady = value; },
+      setServer: (functions) => { window.crypFirebase = { db: null, functions }; serverReady = true; currentUserUID = 'test-user'; },
+      sendHeartbeat,
+      applyServerState,
       save,
       loadState,
       setBlueMarket: (price, ready = true, lastPriceAt = Date.now()) => {
@@ -158,7 +163,7 @@ function createGame() {
         marketReady = ready;
       },
       getBlueMarket: () => ({ ...blueMarketState, ready: blueMarketReady }),
-      setPodiumProfiles: (profiles) => { podiumProfiles = profiles; },
+      setPodiumEntries: (entries) => { podiumEntries = entries; },
       renderPodium,
       setRenderNoop: () => { render = () => {}; save = () => {}; },
       getElement: (id) => document.getElementById(id),
@@ -222,115 +227,6 @@ test('legacy saves gain Blue=0 without losing CRYP progress or farm contents', (
   assert.equal(legacy.extraSlots.length, 16);
 });
 
-test('Blue GPUs buy into inventory, install and mine only Blue at their approved rates', () => {
-  const { api } = createGame();
-  api.setRenderNoop();
-  const state = api.newState();
-  state.cash = 30000;
-  api.setState(state);
-  const blueTypes = api.GPU_TYPES.filter((gpu) => gpu.currency === 'blue');
-
-  blueTypes.forEach((gpu) => api.purchaseGPU(gpu));
-  assert.deepEqual(JSON.parse(JSON.stringify(state.inventory.map((gpu) => [gpu.name, gpu.cost, gpu.rate, gpu.currency]))), [
-    ['RTX 4060', 2400, 0.015, 'blue'],
-    ['RTX 3070', 10000, 0.06, 'blue'],
-    ['RTX 4070', 15000, 0.08, 'blue']
-  ]);
-  assert.equal(state.cash, 2600);
-  assert.ok(state.slots.every((gpu) => gpu === null), 'purchase does not install cards');
-  assert.equal(api.totalRate('blue'), 0, 'inventory does not mine');
-
-  blueTypes.forEach((_gpu, index) => {
-    api.setTargetSlotIndex(index);
-    api.installInventoryGPU(state.inventory[0].inventoryId);
-  });
-  assert.equal(state.inventory.length, 0);
-  assert.equal(api.totalRate('blue'), 0.155);
-  state.slots[3] = { id: 'starter', name: 'Starter GPU', rate: 0.02, currency: 'cryp', cost: 250 };
-  assert.equal(api.totalRate('cryp'), 0.02);
-
-  api.addMining(10);
-  assert.equal(state.blue, 1.55);
-  assert.equal(state.cryp, 0.2);
-});
-
-test('background mining still accrues at most 60 seconds after the tab is hidden', () => {
-  const { api } = createGame();
-  const state = api.newState();
-  state.slots[0] = { id: 'blue-rtx4060', name: 'RTX 4060', rate: 0.015, currency: 'blue', cost: 2400 };
-  api.setState(state);
-
-  api.setDocumentHidden(true);
-  api.triggerVisibilityChange();
-  api.advanceTime(70_000);
-  api.setDocumentHidden(false);
-  api.triggerVisibilityChange();
-
-  assert.ok(Math.abs(state.blue - 0.9) < 1e-9);
-  assert.equal(state.cryp, 0);
-});
-
-test('Blue cards preserve currency when removed and sell installed for exactly half price', () => {
-  const { api } = createGame();
-  api.setRenderNoop();
-  const state = api.newState();
-  state.cash = 50000;
-  api.setState(state);
-  const types = api.GPU_TYPES.filter((gpu) => gpu.currency === 'blue');
-  types.forEach((gpu) => api.purchaseGPU(gpu));
-  types.forEach((_gpu, index) => {
-    api.setTargetSlotIndex(index);
-    api.installInventoryGPU(state.inventory[0].inventoryId);
-  });
-
-  api.setActionSlotIndex(0);
-  api.removeGPUFromFarm();
-  assert.equal(state.slots[0], null);
-  assert.equal(state.inventory[0].currency, 'blue');
-  api.setTargetSlotIndex(0);
-  api.installInventoryGPU(state.inventory[0].inventoryId);
-
-  const cashBeforeSale = state.cash;
-  [1200, 5000, 7500].forEach((expectedGain, index) => {
-    api.setActionSlotIndex(index);
-    api.sellGPUFromFarm();
-    assert.equal(state.cash, cashBeforeSale + [1200, 5000, 7500].slice(0, index + 1).reduce((a, b) => a + b, 0));
-    assert.equal(state.slots[index], null);
-  });
-});
-
-test('Blue sales preview correctly, accept fractions and all, and reject overselling', () => {
-  const { api, elements } = createGame();
-  api.setRenderNoop();
-  const state = api.newState();
-  state.cash = 100;
-  state.blue = 1.25;
-  api.setState(state);
-  api.setBlueMarket(10);
-  api.setSellCurrency('blue');
-  const amount = elements.get('sellAmount');
-  const preview = elements.get('sellPreview');
-
-  amount.value = '0,25';
-  api.updateSellPreview();
-  assert.equal(preview.textContent, '2,50 ₴');
-  api.sellBlue();
-  assert.equal(state.blue, 1);
-  assert.equal(state.cash, 102.5);
-
-  amount.value = '2';
-  api.updateSellPreview();
-  assert.equal(preview.textContent, 'Недостатньо Blue');
-  api.sellBlue();
-  assert.equal(state.blue, 1);
-  assert.equal(state.cash, 102.5);
-
-  amount.value = '1';
-  api.sellBlue();
-  assert.equal(state.blue, 0);
-  assert.equal(state.cash, 112.5);
-});
-
 test('Blue rate uses its own Firestore document, starts at 4.25, and stays in range', async () => {
   const { api } = createGame();
   const { api: otherDevice } = createGame();
@@ -358,46 +254,6 @@ test('Blue rate uses its own Firestore document, starts at 4.25, and stays in ra
   assert.equal(api.clampBluePrice(1), 4.25);
   assert.equal(api.clampBluePrice(99), 13.75);
   assert.equal(api.money(4.25), '4,25 ₴');
-});
-
-test('Blue balance and installed cards persist through local reload and the player Firestore save', async () => {
-  const { api } = createGame();
-  const { database, documents } = makeDatabase();
-  const state = api.newState();
-  state.cash = 1234.5;
-  state.cryp = 5.25;
-  state.blue = 0.75;
-  state.slots[2] = { id: 'blue-rtx4060', name: 'RTX 4060', rate: 0.015, cost: 2400 };
-  api.setState(state);
-  api.setUID('save-test-user');
-  api.setSaveKey('cryp-mining-v01-save-test-user');
-  api.setCloudSaveReady(true);
-  api.setDatabase(database);
-
-  api.save();
-  await api.runPendingTimers();
-  const localReload = api.loadState();
-  const cloudReload = api.normalizeSavedState(documents['players/save-test-user']);
-
-  for (const reloaded of [localReload, cloudReload]) {
-    assert.equal(reloaded.cash, 1234.5);
-    assert.equal(reloaded.cryp, 5.25);
-    assert.equal(reloaded.blue, 0.75);
-    assert.equal(reloaded.slots[2].currency, 'blue');
-    assert.equal(reloaded.slots[2].cost, 2400);
-  }
-});
-
-test('Podium includes Blue value in hryvnia using the independent Blue rate', () => {
-  const { api, elements } = createGame();
-  api.setCrypMarket(3);
-  api.setBlueMarket(10);
-  api.setPodiumProfiles([{ nickname: 'Miner', cashBalance: 100, crypBalance: 2, blueBalance: 0.5 }]);
-  api.renderPodium();
-
-  const rows = elements.get('podiumRows').children;
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].children[3].textContent, '111,00 ₴');
 });
 
 test('shop and farm distinguish Blue cards visually and by currency label', () => {
@@ -428,36 +284,6 @@ test('Blue balances, rates and exchange controls have unique page elements', () 
   ]) assert.ok(ids.includes(id), `missing Blue UI element: ${id}`);
 });
 
-test('Podium still ranks players when the Blue rate is unavailable', () => {
-  const { api, elements } = createGame();
-  api.setCrypMarket(3);
-  api.setBlueMarket(10, false);
-  api.setPodiumProfiles([{ nickname: 'Miner', cashBalance: 100, crypBalance: 2, blueBalance: 1 }]);
-  api.renderPodium();
-
-  const rows = elements.get('podiumRows').children;
-  assert.equal(rows.length, 1);
-  // Blue falls back to its minimum rate (4.25) instead of hiding the ranking.
-  assert.equal(rows[0].children[3].textContent, '110,25 ₴');
-  assert.match(elements.get('podiumStatus').textContent, /Blue/);
-});
-
-test('Podium table is not rebuilt every second when nothing changed', () => {
-  const { api, elements } = createGame();
-  api.setCrypMarket(3);
-  api.setBlueMarket(10);
-  api.setPodiumProfiles([{ nickname: 'Miner', cashBalance: 100, crypBalance: 2, blueBalance: 0.5 }]);
-  api.renderPodium();
-  const firstRow = elements.get('podiumRows').children[0];
-  api.renderPodium();
-  assert.equal(elements.get('podiumRows').children[0], firstRow, 'unchanged ranking keeps the same DOM rows');
-
-  api.setCrypMarket(4);
-  api.renderPodium();
-  assert.notEqual(elements.get('podiumRows').children[0], firstRow, 'a changed rate rebuilds the rows');
-  assert.equal(elements.get('podiumRows').children[0].children[0].textContent, '1');
-});
-
 test('a far-future lastPriceAt from a wrong device clock cannot freeze either shared rate', () => {
   const { api } = createGame();
   const now = api.gameNow();
@@ -467,91 +293,6 @@ test('a far-future lastPriceAt from a wrong device clock cannot freeze either sh
     assert.equal(normalize({ price: 5, lastPriceAt: now + 30_000 }).lastPriceAt, now + 30_000, 'small clock skew is tolerated');
     assert.equal(normalize({ price: 5, lastPriceAt: now - 10_000 }).lastPriceAt, now - 10_000);
   }
-});
-
-test('saves are not reset to 490 UAH by the old starter-balance migration', () => {
-  const { api } = createGame();
-  const state = api.newState();
-  state.cash = 1000;
-  state.blue = 25;
-  api.setState(state);
-  api.setSaveKey('cryp-mining-v01-migration-test');
-  api.save();
-  assert.equal(api.loadState().cash, 1000);
-
-  state.blue = 0;
-  state.cash = 300;
-  api.save();
-  assert.equal(api.loadState().cash, 300);
-});
-
-test('selling accepts the rounded balance shown on screen and numbers copied from the UI', () => {
-  const { api, elements } = createGame();
-  api.setRenderNoop();
-  const state = api.newState();
-  state.blue = 1.2345678; // displayed as 1,234568
-  state.cryp = 5.0004; // displayed as 5,000
-  api.setState(state);
-  api.setBlueMarket(10);
-  api.setCrypMarket(2);
-
-  elements.get('sellAmount').value = '1,234568';
-  api.sellBlue();
-  assert.equal(state.blue, 0, 'the displayed Blue balance can be sold in full');
-  assert.equal(state.cash, 490 + 1.2345678 * 10, 'proceeds use the real balance, never more');
-
-  elements.get('sellAmount').value = '5.0005';
-  api.sellCRYP();
-  assert.equal(state.cryp, 0, 'the displayed CRYP balance can be sold in full');
-
-  state.blue = 1234.5;
-  elements.get('sellAmount').value = '1 234,5';
-  api.sellBlue();
-  assert.equal(state.blue, 0, 'thousands separators from the UI are accepted');
-
-  state.cryp = 5;
-  elements.get('sellAmount').value = '5.01';
-  api.sellCRYP();
-  assert.equal(state.cryp, 5, 'a real oversell is still rejected');
-});
-
-test('periodic cloud saves are throttled and skipped when nothing changed, while actions save promptly', async () => {
-  const { api } = createGame();
-  const { database, documents } = makeDatabase();
-  const state = api.newState();
-  api.setState(state);
-  api.setUID('quota-user');
-  api.setSaveKey('cryp-mining-v01-quota-user');
-  api.setCloudSaveReady(true);
-  api.setDatabase(database);
-  const stored = () => documents['players/quota-user'];
-
-  api.save({ periodic: true });
-  await api.runPendingTimers();
-  const first = stored();
-  assert.ok(first, 'the first periodic save reaches the cloud');
-
-  api.advanceTime(5000);
-  state.cryp += 1;
-  api.save({ periodic: true });
-  await api.runPendingTimers();
-  assert.equal(stored(), first, 'periodic saves inside 30 seconds are skipped');
-
-  api.save();
-  await api.runPendingTimers();
-  const afterAction = stored();
-  assert.notEqual(afterAction, first, 'a player action is written to the cloud promptly');
-
-  api.advanceTime(31_000);
-  api.save({ periodic: true });
-  await api.runPendingTimers();
-  assert.equal(stored(), afterAction, 'an unchanged state is not rewritten even after the interval');
-
-  state.cryp += 1;
-  api.save({ periodic: true });
-  await api.runPendingTimers();
-  assert.notEqual(stored(), afterAction, 'a changed state is written once the interval has passed');
-  assert.ok(Number(stored().savedAt) > 0, 'cloud saves carry a client timestamp used to pick the newer save at login');
 });
 
 test('farm slot labels use Ukrainian wording', () => {
@@ -572,8 +313,10 @@ test('Firestore rules validate both shared rates, including the server-time chec
   assert.match(rules, /match \/market\/blueExchangeRate[\s\S]*?validRateData\(4\.25, 13\.75\)/);
   assert.match(rules, /request\.time\.toMillis\(\) - 60000/);
   assert.match(rules, /request\.time\.toMillis\(\) \+ 60000/);
-  assert.match(rules, /match \/podiumPlayers\/\{playerId\}/);
-  assert.match(rules, /match \/players\/\{playerId\}/);
+  // Server-owned data: players may read their own save but never write it; the Podium snapshot is read-only.
+  assert.match(rules, /match \/players\/\{playerId\}\s*\{\s*(?:\/\/[^\n]*\n\s*)*allow read: if request\.auth != null && request\.auth\.uid == playerId;\s*allow write: if false;/);
+  assert.match(rules, /match \/podium\/\{docId\}\s*\{\s*allow read: if request\.auth != null;\s*allow write: if false;/);
+  assert.doesNotMatch(rules, /podiumPlayers/);
 });
 
 test('every rate tick (5 s step) and every 5 min step also writes shared history points, without touching the rate logic', async () => {
@@ -625,48 +368,6 @@ test('Firestore rules protect the shared rate history (range, write-once points,
   assert.match(rules, /affectedKeys\(\)\.size\(\) == 1/);
   assert.match(rules, /\[1-6\]\[0-9\]\[0-9\]\|7\[01\]\[0-9\]/);
   assert.match(rules, /28\[0-7\]/);
-});
-
-test('one shared sell form: the toggle picks the currency, switching clears the amount, each currency sells at its own rate', () => {
-  const { api, elements } = createGame();
-  api.setRenderNoop();
-  const state = api.newState();
-  state.cash = 0;
-  state.cryp = 10;
-  state.blue = 2;
-  api.setState(state);
-  api.setCrypMarket(2);
-  api.setBlueMarket(10);
-  const amount = elements.get('sellAmount');
-  const preview = elements.get('sellPreview');
-
-  amount.value = '3';
-  api.updateSellPreview();
-  assert.equal(preview.textContent, '6,00 ₴', 'CRYP is selected by default');
-
-  api.setSellCurrency('blue');
-  assert.equal(elements.get('tradeCryp').hidden, true, 'the CRYP balance and rate are hidden when Blue is selected');
-  assert.equal(elements.get('tradeBlue').hidden, false, 'the Blue balance and rate are shown');
-  assert.equal(amount.value, '', 'switching currency clears the typed amount');
-  amount.value = '3';
-  api.updateSellPreview();
-  assert.equal(preview.textContent, 'Недостатньо Blue', 'Blue balance is checked, not CRYP');
-  amount.value = '1,5';
-  api.updateSellPreview();
-  assert.equal(preview.textContent, '15,00 ₴');
-  assert.equal(elements.get('sellButton').textContent, 'Продати Blue');
-
-  api.sellBlue();
-  assert.equal(state.blue, 0.5);
-  assert.equal(state.cryp, 10, 'selling Blue does not touch CRYP');
-  assert.equal(state.cash, 15);
-
-  api.setSellCurrency('cryp');
-  amount.value = '4';
-  api.sellCRYP();
-  assert.equal(state.cryp, 6);
-  assert.equal(state.blue, 0.5);
-  assert.equal(state.cash, 23);
 });
 
 test('the first tick after a break stores the rate held through it next to the new point, without touching the rate logic', async () => {
@@ -723,4 +424,220 @@ test('after sign-out and a new sign-in the chart is re-armed on the open Exchang
   api.stopChart();
   api.syncChartVisibility();
   assert.equal(historyListeners, 4, 'no history reads while another page is open');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Server-authoritative game: the browser only calls Cloud Functions. The fake server below runs the real
+// engine (functions/lib/engine.js), so these tests cover the browser and the game rules together.
+// ---------------------------------------------------------------------------------------------
+function makeServer(api, setup = (state) => state, rates = { cryp: 2, blue: 10 }) {
+  const server = { state: setup(engine.newState(api.gameNow())), rates, calls: [] };
+  const strip = (state) => { const { recentOps, ...visible } = JSON.parse(JSON.stringify(state)); return visible; };
+  server.functions = {
+    httpsCallable: (name) => async (data) => {
+      server.calls.push({ name, data });
+      if (server.failNext) { const error = server.failNext; server.failNext = null; throw error; }
+      const nowMs = api.gameNow();
+      if (name === 'gameAction') {
+        const applied = engine.applyAction(server.state, { type: data.type, payload: data.payload, opId: data.opId }, { nowMs, rates: server.rates, random: Math.random });
+        server.state = applied.state;
+        return { data: { state: strip(server.state), duplicate: applied.duplicate, serverNow: nowMs } };
+      }
+      if (name === 'heartbeat') {
+        server.state = engine.applyHeartbeat(server.state, nowMs).state;
+        return { data: { state: strip(server.state), serverNow: nowMs } };
+      }
+      throw new Error('unknown function ' + name);
+    }
+  };
+  api.setServer(server.functions);
+  api.applyServerState({ state: strip(server.state) });
+  return server;
+}
+
+test('the browser never writes players or podium data directly: only Cloud Functions change progress', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'game.js'), 'utf8');
+  assert.ok(!/collection\("players"\)/.test(source), 'no direct access to players/{uid}');
+  assert.ok(!/podiumPlayers/.test(source));
+  assert.ok(!/localStorage\.setItem/.test(source), 'progress is not stored in the browser any more');
+  assert.match(source, /httpsCallable\("gameAction"\)/);
+  assert.match(source, /httpsCallable\("heartbeat"\)/);
+  assert.match(source, /httpsCallable\("initPlayer"\)/);
+  assert.ok(!/legacySave/.test(source), 'the browser never sends a saved game to the server');
+});
+
+test('Blue cards: buy, install, remove and sell through the server at the approved prices and 50% resale', async () => {
+  const { api } = createGame();
+  api.setRenderNoop();
+  const server = makeServer(api, (state) => ({ ...state, cash: 50000 }));
+  const blueTypes = api.GPU_TYPES.filter((gpu) => gpu.currency === 'blue');
+
+  for (const gpu of blueTypes) await api.purchaseGPU(gpu);
+  assert.deepEqual(JSON.parse(JSON.stringify(api.getState().inventory.map((gpu) => [gpu.name, gpu.cost, gpu.rate, gpu.currency]))), [
+    ['RTX 4060', 2400, 0.015, 'blue'], ['RTX 3070', 10000, 0.06, 'blue'], ['RTX 4070', 15000, 0.08, 'blue']
+  ]);
+  assert.equal(api.getState().cash, 22600);
+  assert.equal(api.totalRate('blue'), 0, 'inventory does not mine');
+
+  for (let index = 0; index < blueTypes.length; index += 1) {
+    api.setTargetSlotIndex(index);
+    await api.installInventoryGPU(api.getState().inventory[0].inventoryId);
+  }
+  assert.equal(api.getState().inventory.length, 0);
+  assert.equal(api.totalRate('blue'), 0.155);
+
+  api.setActionSlotIndex(0);
+  await api.removeGPUFromFarm();
+  assert.equal(api.getState().slots[0], null);
+  assert.equal(api.getState().inventory[0].currency, 'blue');
+  api.setTargetSlotIndex(0);
+  await api.installInventoryGPU(api.getState().inventory[0].inventoryId);
+
+  const before = api.getState().cash;
+  for (let index = 0; index < 3; index += 1) { api.setActionSlotIndex(index); await api.sellGPUFromFarm(); }
+  assert.equal(api.getState().cash, before + 1200 + 5000 + 7500);
+  assert.equal(server.state.cash, api.getState().cash, 'browser and server agree');
+});
+
+test('a purchase without enough money is refused and changes nothing on the server', async () => {
+  const { api } = createGame();
+  api.setRenderNoop();
+  const server = makeServer(api);
+  await api.purchaseGPU(api.GPU_TYPES.find((gpu) => gpu.id === 'rtx4090'));
+  assert.equal(server.state.cash, 490);
+  assert.equal(server.calls.length, 0, 'refused locally, no server call needed');
+});
+
+test('a failed server call keeps the previous state and a retry reuses the same operation id', async () => {
+  const { api } = createGame();
+  api.setRenderNoop();
+  const server = makeServer(api);
+  const starter = api.GPU_TYPES[0];
+  server.failNext = Object.assign(new Error('offline'), { code: 'unavailable' });
+  await api.purchaseGPU(starter);
+  const ids = server.calls.filter((call) => call.name === 'gameAction').map((call) => call.data.opId);
+  assert.equal(ids.length, 2, 'one automatic retry after a network error');
+  assert.equal(ids[0], ids[1], 'same operation id, so it can never be applied twice');
+  assert.equal(server.state.cash, 240);
+  assert.equal(server.state.inventory.length, 1);
+});
+
+test('selling uses the server rate; fractions, comma input and "sell all" work; overselling is rejected', async () => {
+  const { api, elements } = createGame();
+  api.setRenderNoop();
+  const server = makeServer(api, (state) => ({ ...state, cash: 100, blue: 1.25 }), { cryp: 2, blue: 10 });
+  api.setBlueMarket(10);
+  api.setCrypMarket(2);
+  api.setSellCurrency('blue');
+  const amount = elements.get('sellAmount');
+
+  amount.value = '0,25';
+  api.updateSellPreview();
+  assert.equal(elements.get('sellPreview').textContent, '2,50 ₴');
+  await api.sellBlue();
+  assert.equal(api.getState().blue, 1);
+  assert.equal(api.getState().cash, 102.5);
+
+  amount.value = '2';
+  api.updateSellPreview();
+  assert.equal(elements.get('sellPreview').textContent, 'Недостатньо Blue');
+  const callsBefore = server.calls.length;
+  await api.sellBlue();
+  assert.equal(server.calls.length, callsBefore, 'an impossible sale never reaches the server');
+
+  await api.sellCurrency('blue', true);
+  assert.equal(api.getState().blue, 0);
+  assert.equal(api.getState().cash, 112.5);
+});
+
+test('selling accepts the rounded balance shown on screen', async () => {
+  const { api, elements } = createGame();
+  api.setRenderNoop();
+  makeServer(api, (state) => ({ ...state, blue: 1.234568, cryp: 5.0004 }), { cryp: 2, blue: 10 });
+  api.setBlueMarket(10);
+  api.setCrypMarket(2);
+  elements.get('sellAmount').value = '1,234568';
+  await api.sellBlue();
+  assert.equal(api.getState().blue, 0);
+  elements.get('sellAmount').value = '5.0005';
+  await api.sellCRYP();
+  assert.equal(api.getState().cryp, 0);
+});
+
+test('one shared sell form: the toggle picks the currency and each currency sells at its own server rate', async () => {
+  const { api, elements } = createGame();
+  api.setRenderNoop();
+  makeServer(api, (state) => ({ ...state, cash: 0, cryp: 10, blue: 2 }), { cryp: 2, blue: 10 });
+  api.setCrypMarket(2);
+  api.setBlueMarket(10);
+  const amount = elements.get('sellAmount');
+  amount.value = '3';
+  api.updateSellPreview();
+  assert.equal(elements.get('sellPreview').textContent, '6,00 ₴');
+  api.setSellCurrency('blue');
+  assert.equal(amount.value, '', 'switching currency clears the typed amount');
+  amount.value = '1,5';
+  await api.sellBlue();
+  assert.equal(api.getState().blue, 0.5);
+  assert.equal(api.getState().cryp, 10);
+  assert.equal(api.getState().cash, 15);
+  api.setSellCurrency('cryp');
+  amount.value = '4';
+  await api.sellCRYP();
+  assert.equal(api.getState().cryp, 6);
+  assert.equal(api.getState().cash, 23);
+});
+
+test('mining is credited by the server heartbeat, never twice, and a long break credits nothing', async () => {
+  const { api } = createGame();
+  api.setRenderNoop();
+  const server = makeServer(api, (state) => {
+    state.slots[0] = { id: 'blue-rtx4060', name: 'RTX 4060', rate: 0.015, currency: 'blue', cost: 2400 };
+    return state;
+  });
+  api.advanceTime(60_000);
+  await api.sendHeartbeat();
+  assert.ok(Math.abs(api.getState().blue - 0.9) < 1e-9, 'a normal 60 s heartbeat pays 60 s');
+  await api.sendHeartbeat();
+  assert.ok(Math.abs(server.state.blue - 0.9) < 1e-9, 'an immediate second heartbeat (other device or tab) pays nothing');
+
+  api.advanceTime(10 * 60_000);
+  await api.sendHeartbeat();
+  assert.ok(Math.abs(server.state.blue - 0.9) < 1e-9, 'a break over the limit is not paid');
+});
+
+test('returning to the tab triggers a server heartbeat that decides how much of the break counts', async () => {
+  const { api } = createGame();
+  api.setRenderNoop();
+  const server = makeServer(api, (state) => {
+    state.slots[0] = { id: 'blue-rtx4060', name: 'RTX 4060', rate: 0.015, currency: 'blue', cost: 2400 };
+    return state;
+  });
+  api.setDocumentHidden(true);
+  api.triggerVisibilityChange();
+  await new Promise((resolve) => setImmediate(resolve));
+  api.advanceTime(50_000);
+  api.setDocumentHidden(false);
+  api.triggerVisibilityChange();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(Math.abs(server.state.blue - 0.75) < 1e-9, '50 s away is credited by the server');
+});
+
+test('the Podium shows the hourly server snapshot and is not rebuilt when nothing changed', () => {
+  const { api, elements } = createGame();
+  api.setPodiumEntries([
+    { rank: 1, nickname: 'Miner', cashBalance: 100, totalCapital: 111 },
+    { rank: 2, nickname: 'Second', cashBalance: 5, totalCapital: 20 }
+  ]);
+  api.renderPodium();
+  const rows = elements.get('podiumRows').children;
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].children[1].textContent, 'Miner');
+  assert.equal(rows[0].children[3].textContent, '111,00 ₴');
+  const first = rows[0];
+  api.renderPodium();
+  assert.equal(elements.get('podiumRows').children[0], first, 'unchanged snapshot keeps the same DOM rows');
+  api.setPodiumEntries([{ rank: 1, nickname: 'Miner', cashBalance: 100, totalCapital: 150 }]);
+  api.renderPodium();
+  assert.notEqual(elements.get('podiumRows').children[0], first);
 });

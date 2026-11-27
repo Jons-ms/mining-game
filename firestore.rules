@@ -24,9 +24,17 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    // Each signed-in player can access only their own private save.
+    // Each signed-in player can read only their own save. Nobody can write it from the browser:
+    // balances, cards and mining are changed only by the Cloud Functions (Admin SDK bypasses these rules).
     match /players/{playerId} {
-      allow read, write: if request.auth != null && request.auth.uid == playerId;
+      allow read: if request.auth != null && request.auth.uid == playerId;
+      allow write: if false;
+    }
+
+    // Hourly Podium snapshot written by the server (functions/index.js); players only read it.
+    match /podium/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
 
     // CRYP shared rate: 0.25-7 UAH, starts at 1 UAH.
@@ -95,49 +103,18 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // CRYP BANK (beta). One account per player and currency: the document id is "<uid>_<currency>" and it can only
-    // be created (never changed or deleted), together with a reservation "cardNumbers/<16 digits>" that keeps the
-    // card number unique. The two documents must be written in one batch and must agree with each other.
-    function validCardNumber(number, currency) {
-      return number is string
-        && ((currency == 'uah' && number.matches('9001[0-9]{12}'))
-          || (currency == 'cryp' && number.matches('9002[0-9]{12}'))
-          || (currency == 'blue' && number.matches('9003[0-9]{12}')));
-    }
+    // CRYP BANK. Accounts and card numbers are created only by the Cloud Function openBankAccount (Admin SDK):
+    // the browser can read its own accounts but can never create or change one. The card-number registry that
+    // keeps numbers unique is closed for the browser completely.
     match /bankAccounts/{accountId} {
       // Decided by the document id, not by resource.data: reading an account that is not opened yet must be allowed.
       allow read: if request.auth != null
         && accountId in [request.auth.uid + '_uah', request.auth.uid + '_cryp', request.auth.uid + '_blue'];
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['uid', 'currency', 'cardNumber', 'openedAt'])
-        && request.resource.data.keys().hasAll(['uid', 'currency', 'cardNumber', 'openedAt'])
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.currency in ['uah', 'cryp', 'blue']
-        && accountId == request.auth.uid + '_' + request.resource.data.currency
-        && validCardNumber(request.resource.data.cardNumber, request.resource.data.currency)
-        && request.resource.data.openedAt == request.time
-        && getAfter(/databases/$(database)/documents/cardNumbers/$(request.resource.data.cardNumber)).data.uid == request.auth.uid
-        && getAfter(/databases/$(database)/documents/cardNumbers/$(request.resource.data.cardNumber)).data.currency == request.resource.data.currency;
-      allow update, delete: if false;
+      allow write: if false;
     }
     match /cardNumbers/{cardNumber} {
-      // Nobody can read the registry: a number cannot be looked up or traced to a player.
-      allow read: if false;
-      allow create: if request.auth != null
-        && request.resource.data.keys().hasOnly(['uid', 'currency', 'createdAt'])
-        && request.resource.data.keys().hasAll(['uid', 'currency', 'createdAt'])
-        && request.resource.data.uid == request.auth.uid
-        && request.resource.data.currency in ['uah', 'cryp', 'blue']
-        && validCardNumber(cardNumber, request.resource.data.currency)
-        && request.resource.data.createdAt == request.time
-        && getAfter(/databases/$(database)/documents/bankAccounts/$(request.auth.uid + '_' + request.resource.data.currency)).data.cardNumber == cardNumber;
-      allow update, delete: if false;
+      allow read, write: if false;
     }
 
-    // Players publish only their own public ranking row; private saves remain private.
-    match /podiumPlayers/{playerId} {
-      allow read: if request.auth != null;
-      allow create, update, delete: if request.auth != null && request.auth.uid == playerId;
-    }
   }
 }

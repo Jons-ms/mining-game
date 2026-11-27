@@ -15,17 +15,15 @@
    * account only creates a card; it never creates money, moves money or touches the player's save, the
    * rates, mining or the Podium.
    *
-   * Storage (Cloud Firestore):
+   * Storage (Cloud Firestore), written ONLY by the Cloud Function openBankAccount:
    *  - bankAccounts/{uid}_{currency}: { uid, currency, cardNumber, openedAt } — the player's own account.
-   *    The document id is fixed per player and currency, and the document can only be created, so a player
-   *    can hold at most one account per currency.
-   *  - cardNumbers/{cardNumber}: { uid, currency, createdAt } — a write-only reservation that keeps the
-   *    16-digit card number unique. Both documents are written in one batch.
+   *    The id is fixed per player and currency, so a player holds at most one account per currency.
+   *  - cardNumbers/{cardNumber}: { uid, currency, createdAt } — closed reservation that keeps numbers unique.
+   * The browser only reads its own accounts and asks the server to open one.
    */
 
   const COLLECTION_ACCOUNTS = "bankAccounts";
   const COLLECTION_CARD_NUMBERS = "cardNumbers";
-  const MAX_OPEN_ATTEMPTS = 4;
 
   // The card number starts with a bank prefix per currency, then 11 random digits and a Luhn check digit.
   const CURRENCIES = [
@@ -60,25 +58,6 @@
     return luhnCheckDigit(value.slice(0, 15)) === value[15];
   }
 
-  // randomDigit(): returns an integer 0-9. The default uses the browser's cryptographic generator.
-  function defaultRandomDigit() {
-    const cryptoApi = (typeof globalThis !== "undefined" && globalThis.crypto) || null;
-    if (cryptoApi && typeof cryptoApi.getRandomValues === "function") {
-      const buffer = new Uint8Array(1);
-      do { cryptoApi.getRandomValues(buffer); } while (buffer[0] >= 250);
-      return buffer[0] % 10;
-    }
-    return Math.floor(Math.random() * 10);
-  }
-
-  function generateCardNumber(currencyId, randomDigit = defaultRandomDigit) {
-    const currency = currencyById(currencyId);
-    if (!currency) throw new Error("Невідома валюта: " + currencyId);
-    let payload = currency.prefix;
-    while (payload.length < 15) payload += String(randomDigit());
-    return payload + luhnCheckDigit(payload);
-  }
-
   function formatCardNumber(value) {
     return String(value || "").replace(/(\d{4})(?=\d)/g, "$1 ");
   }
@@ -90,16 +69,6 @@
     return text + " " + currency.symbol;
   }
 
-  // The documents of one opening, built in one place so the tests can check exactly what is written.
-  function buildOpenAccountWrites(uid, currencyId, cardNumber, serverTimestamp) {
-    return {
-      accountId: accountDocId(uid, currencyId),
-      account: { uid, currency: currencyId, cardNumber, openedAt: serverTimestamp },
-      cardNumber,
-      reservation: { uid, currency: currencyId, createdAt: serverTimestamp }
-    };
-  }
-
   function parseAccount(uid, currencyId, data) {
     if (!data || data.uid !== uid || data.currency !== currencyId || !isValidCardNumber(data.cardNumber)) return null;
     return { currency: currencyId, cardNumber: data.cardNumber };
@@ -107,14 +76,9 @@
 
   function create(options = {}) {
     const doc = options.document || (typeof document !== "undefined" ? document : null);
-    const randomDigit = options.randomDigit || defaultRandomDigit;
-    const serverTimestamp = options.serverTimestamp || (() => (
-      typeof window !== "undefined" && window.firebase && window.firebase.firestore
-        ? window.firebase.firestore.FieldValue.serverTimestamp()
-        : { serverTimestamp: true }
-    ));
 
     let db = null;
+    let functions = null;
     let uid = null;
     let session = 0;
     let status = "idle"; // idle | loading | ready | error
@@ -222,9 +186,10 @@
       render();
     }
 
+    // The server picks the card number and creates both documents; the browser never writes them.
     async function openAccount(currencyId) {
       const currency = currencyById(currencyId);
-      if (!currency || !db || !uid || status !== "ready") return false;
+      if (!currency || !db || !functions || !uid || status !== "ready") return false;
       if (accounts[currencyId] || opening[currencyId]) return false;
       const mySession = session;
       opening[currencyId] = true;
@@ -232,24 +197,14 @@
       render();
       let opened = false;
       try {
-        for (let attempt = 1; attempt <= MAX_OPEN_ATTEMPTS && !opened; attempt++) {
-          const cardNumber = generateCardNumber(currencyId, randomDigit);
-          const writes = buildOpenAccountWrites(uid, currencyId, cardNumber, serverTimestamp());
-          const batch = db.batch();
-          batch.set(db.collection(COLLECTION_CARD_NUMBERS).doc(writes.cardNumber), writes.reservation);
-          batch.set(db.collection(COLLECTION_ACCOUNTS).doc(writes.accountId), writes.account);
-          try {
-            await batch.commit();
-            opened = true;
-            if (mySession === session) accounts[currencyId] = { currency: currencyId, cardNumber };
-          } catch (error) {
-            // A taken number (or a rules problem) is rejected as permission-denied: try another number a few times.
-            if (attempt === MAX_OPEN_ATTEMPTS) throw error;
-          }
-        }
+        const response = await functions.httpsCallable("openBankAccount")({ currency: currencyId });
+        const cardNumber = response && response.data && response.data.cardNumber;
+        if (!isValidCardNumber(cardNumber)) throw new Error("Сервер повернув некоректний номер картки");
+        opened = true;
+        if (mySession === session) accounts[currencyId] = { currency: currencyId, cardNumber };
       } catch (error) {
         console.error("Не вдалося відкрити рахунок " + currency.code + ":", error);
-        if (mySession === session) message = "Не вдалося відкрити рахунок " + currency.code + ". Спробуй ще раз або перевір правила Firestore.";
+        if (mySession === session) message = "Не вдалося відкрити рахунок " + currency.code + ". Спробуй ще раз.";
       }
       if (mySession === session) {
         delete opening[currencyId];
@@ -258,10 +213,11 @@
       return opened;
     }
 
-    function start(database, playerUid) {
+    function start(database, playerUid, functionsClient) {
       stop();
       if (!database || !playerUid) return;
       db = database;
+      functions = functionsClient || null;
       uid = playerUid;
       load();
     }
@@ -269,6 +225,7 @@
     function stop() {
       session += 1;
       db = null;
+      functions = null;
       uid = null;
       status = "idle";
       message = "";
@@ -284,8 +241,8 @@
   }
 
   return {
-    COLLECTION_ACCOUNTS, COLLECTION_CARD_NUMBERS, CURRENCIES, MAX_OPEN_ATTEMPTS,
-    currencyById, accountDocId, luhnCheckDigit, isValidCardNumber, generateCardNumber,
-    formatCardNumber, formatBalance, buildOpenAccountWrites, parseAccount, create
+    COLLECTION_ACCOUNTS, COLLECTION_CARD_NUMBERS, CURRENCIES,
+    currencyById, accountDocId, luhnCheckDigit, isValidCardNumber,
+    formatCardNumber, formatBalance, parseAccount, create
   };
 });
