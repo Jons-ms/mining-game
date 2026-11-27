@@ -110,7 +110,7 @@ jobs:
       STEP: ${{ inputs.action }}
       CODE_SHA: ${{ inputs.commit_sha }}
       PROJECT_ID: cryp-togame
-      STORAGE_BUCKET: cryp-togame.firebasestorage.app
+      STORAGE_BUCKET: cryp-togame-firestore-backups
       FUNCTIONS_REGION: europe-west1
       # The ONLY functions this workflow deploys. Must be exactly the Cloud Functions exported by functions/index.js:
       # scripts/check-deploy-functions.js loads the real code and compares (see the deploy-functions step).
